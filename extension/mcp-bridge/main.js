@@ -16,11 +16,27 @@ function init () {
         }
       }
     }
-    instance = server.start(userData, routes)
-    console.log('[mcp-bridge] escuchando en 127.0.0.1:39876')
+    // El log de "escuchando" vive en server.js, dentro del handler de
+    // 'listening': ahi es donde realmente es cierto. Aca solo nos importa
+    // el caso de error, que llega async y por eso no lo agarra este try/catch.
+    server.start(userData, routes, function (err, srv) {
+      if (err) {
+        console.error('[mcp-bridge] no se pudo iniciar el servidor: ' + err)
+        return
+      }
+      instance = srv
+    })
   } catch (err) {
     console.error('[mcp-bridge] FALLO: ' + err)
   }
 }
 
+function deactivate () {
+  if (instance) {
+    instance.close()
+    instance = null
+  }
+}
+
 exports.init = init
+exports.deactivate = deactivate
