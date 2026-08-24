@@ -82,15 +82,30 @@ Crear `extension/mcp-bridge/main.js`. Node 7.9: sin optional chaining, sin `??`,
 
 ```js
 // Prueba de nodeIntegration. Si esto corre, require() funciona dentro del renderer.
+//
+// El diagnostico va a un ARCHIVO, no solo a la consola: DevTools es un panel
+// grafico y no se puede leer desde un script. El archivo es la fuente de verdad.
 function init () {
+  var lines = []
+  function log (msg) {
+    lines.push(msg)
+    console.log('[mcp-bridge] ' + msg)
+  }
   try {
     var electron = require('electron')
+    var fs = require('fs')
+    var path = require('path')
+    var userData = electron.remote.app.getPath('userData')
+
+    log('OK -- nodeIntegration activo')
+    log('node=' + process.versions.node + ' electron=' + process.versions.electron)
+    log('userData=' + userData)
+    log('http=' + (typeof require('http').createServer === 'function'))
+    log('app=' + (typeof app) + ' factory=' + (typeof app.factory))
+    log('modelAndViewFn=' + Object.keys(app.factory.modelAndViewFn).length)
+
+    fs.writeFileSync(path.join(userData, 'mcp-bridge-boot.log'), lines.join('\n'), 'utf8')
     electron.remote.getCurrentWindow().webContents.openDevTools()
-    console.log('[mcp-bridge] OK -- nodeIntegration activo')
-    console.log('[mcp-bridge] node=' + process.versions.node + ' electron=' + process.versions.electron)
-    console.log('[mcp-bridge] userData=' + electron.remote.app.getPath('userData'))
-    console.log('[mcp-bridge] http=' + (typeof require('http').createServer === 'function'))
-    console.log('[mcp-bridge] app=' + (typeof app) + ' factory=' + (typeof app.factory))
   } catch (err) {
     console.error('[mcp-bridge] FALLO: ' + err)
   }
@@ -98,6 +113,10 @@ function init () {
 
 exports.init = init
 ```
+
+Si `require` no existiera, la primera linea del `try` tira y no se escribe nada. Por eso
+**la ausencia del archivo es en si misma el resultado negativo**, y no hace falta un
+fallback que tambien dependeria de `require`.
 
 El loader llama a `init()` si existe (`extension-loader.js:191-197`) y traga las
 excepciones, por eso el `try/catch` propio.
@@ -127,20 +146,29 @@ Cerrar StarUML por completo y volver a abrirlo. No hay hot reload.
 
 - [ ] **Step 4: Verificar**
 
-Al abrir StarUML debe abrirse solo el panel de DevTools. En su pestaña Console, esperado:
-
-```
-[mcp-bridge] OK -- nodeIntegration activo
-[mcp-bridge] node=7.9.0 electron=1.7.11
-[mcp-bridge] userData=C:\Users\<user>\AppData\Roaming\StarUML
-[mcp-bridge] http=true
-[mcp-bridge] app=object factory=object
+```bash
+cat "$APPDATA/StarUML/mcp-bridge-boot.log"
 ```
 
-**Si DevTools no abre y no ves nada:** `nodeIntegration` está desactivado. **Pará acá.**
+Esperado:
 
-**Si ves `[mcp-bridge] FALLO:` con `require is not defined`:** mismo caso, pará. Si el error
-es otro, es un bug del script y se arregla.
+```
+OK -- nodeIntegration activo
+node=7.9.0 electron=1.7.11
+userData=C:\Users\<user>\AppData\Roaming\StarUML
+http=true
+app=object factory=object
+modelAndViewFn=123
+```
+
+Además debe haberse abierto solo el panel de DevTools dentro de StarUML.
+
+**Si el archivo no existe:** `nodeIntegration` está desactivado, o la extensión no se cargó.
+**Pará acá y escalá al humano.** No sigas con la Tarea 2.
+
+Para distinguir las dos causas hay que mirar la consola de DevTools: `require is not
+defined` significa nodeIntegration off, y el proyecto es inviable. Cualquier otro error es
+un bug del script y se arregla.
 
 - [ ] **Step 5: Commit**
 
@@ -837,6 +865,7 @@ Agregar a `.gitignore`:
 
 ```
 smoke-out.png
+*.log
 ```
 
 - [ ] **Step 7: Commit**
