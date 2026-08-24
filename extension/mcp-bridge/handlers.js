@@ -40,6 +40,41 @@ function createDiagram (body) {
   return ref(diagram)
 }
 
+// Un solo endpoint para nodos y relaciones. La diferencia la marca la presencia
+// de tailId/headId, que son ids de VISTA (no de modelo): las relaciones se
+// dibujan entre vistas.
+function create (body) {
+  var diagram = body.diagramId ? resolve(body.diagramId) : app.diagrams.getCurrentDiagram()
+  if (!diagram) throw new Error('No hay diagrama destino')
+
+  var options = {
+    id: body.id,
+    diagram: diagram,
+    parent: body.parentId ? resolve(body.parentId) : diagram._parent,
+    x1: body.x1 || 0,
+    y1: body.y1 || 0,
+    x2: body.x2 || 0,
+    y2: body.y2 || 0,
+    modelInitializer: function (model) {
+      if (body.name) model.name = body.name
+    }
+  }
+
+  if (body.tailId && body.headId) {
+    var tailView = resolve(body.tailId)
+    var headView = resolve(body.headId)
+    options.tailView = tailView
+    options.headView = headView
+    options.tailModel = tailView.model
+    options.headModel = headView.model
+  }
+
+  var view = app.factory.createModelAndView(options)
+  if (!view) throw new Error('createModelAndView devolvio null para id=' + body.id)
+  return { view: ref(view), model: ref(view.model) }
+}
+
 exports.ref = ref
 exports.resolve = resolve
 exports.createDiagram = createDiagram
+exports.create = create
