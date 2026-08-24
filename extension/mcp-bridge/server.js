@@ -20,7 +20,10 @@ function jsonResponse (res, status, payload) {
 // por lo que un split(':') ingenuo lo trunca en '['; se compara aparte.
 function hostAllowed (host) {
   if (!host) return false
-  if (host.indexOf('[::1]') === 0) return true
+  // Coincidencia exacta, no de prefijo: indexOf(...) === 0 dejaria pasar
+  // '[::1].evil.com'. No es explotable desde un navegador (el parser de URL
+  // rechaza esa forma) pero esta funcion es una whitelist y no debe tener holguras.
+  if (host === '[::1]' || host.indexOf('[::1]:') === 0) return true
   var name = host.split(':')[0]
   return name === '127.0.0.1' || name === 'localhost'
 }
