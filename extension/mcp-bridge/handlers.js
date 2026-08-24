@@ -74,7 +74,28 @@ function create (body) {
   return { view: ref(view), model: ref(view.model) }
 }
 
+// setProperty pasa por el engine, asi que queda en el historial de undo.
+function update (body) {
+  var elem = resolve(body.id)
+  app.engine.setProperty(elem, body.field, body.value)
+  return ref(app.repository.get(body.id))
+}
+
+function query (body) {
+  var found
+  if (body.type) {
+    found = app.repository.getInstancesOf(body.type)
+  } else if (body.selector) {
+    found = app.repository.select(body.selector)
+  } else {
+    throw new Error('query necesita type o selector')
+  }
+  return found.map(ref)
+}
+
 exports.ref = ref
 exports.resolve = resolve
 exports.createDiagram = createDiagram
 exports.create = create
+exports.update = update
+exports.query = query

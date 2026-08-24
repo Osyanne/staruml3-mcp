@@ -75,6 +75,17 @@ try {
     console.log('vista de asociacion OK:', rel.data.view._type)
   }
 
+  const upd = await call('/update', { id: a.data.model._id, field: 'name', value: 'Estudiante' })
+  if (!upd.ok) { console.error('update FALLO', upd); process.exit(1) }
+
+  const q = await call('/query', { type: 'UMLClass' })
+  if (!q.ok) { console.error('query FALLO', q); process.exit(1) }
+  const nombres = q.data.map(e => e.name)
+  console.log('clases en el proyecto:', nombres.join(', '))
+  if (!nombres.includes('Estudiante')) {
+    console.error('FALLO: el rename no se aplico'); process.exit(1)
+  }
+
   console.log('OK')
 } catch (err) {
   if (err && err.code === 'ENOENT') {
