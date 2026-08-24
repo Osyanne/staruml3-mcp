@@ -93,9 +93,46 @@ function query (body) {
   return found.map(ref)
 }
 
+// layout() es metodo de Diagram (core.js:3461), no un comando registrado.
+// Por eso tiene endpoint propio en vez de ir por /export.
+function layout (body) {
+  var diagram = resolve(body.diagramId)
+  var direction = body.direction || 'TB'
+  var separations = body.separations || { node: 40, edge: 40, rank: 60 }
+  diagram.layout(direction, separations)
+  app.repository.setModified(true)
+  return ref(diagram)
+}
+
+// Con fullPath el comando NO abre save dialog (default-commands.js:319).
+// app.commands.execute() es sincronico aca: CommandManager.execute() (core
+// command-manager.js) devuelve tal cual lo que retorne el commandFn, y
+// handleExportDiagramToPNG/JPEG/SVG (default-commands.js) no retornan nada
+// (undefined) — llaman a DiagramExport.exportTo*() de forma sincronica, que
+// a su vez usa canvas.toDataURL() + fs.writeFileSync() (diagram-export.js),
+// ambos bloqueantes. Verificado leyendo el app.asar de StarUML 3.0.2: no hay
+// promesa involucrada en esta cadena, asi que no hace falta esperar nada —
+// el archivo ya existe en disco cuando execute() retorna.
+var EXPORT_COMMANDS = {
+  png: 'project:export-diagram-to-png',
+  jpeg: 'project:export-diagram-to-jpeg',
+  svg: 'project:export-diagram-to-svg'
+}
+
+function exportDiagram (body) {
+  var diagram = resolve(body.diagramId)
+  var command = EXPORT_COMMANDS[body.format]
+  if (!command) throw new Error('Formato no soportado: ' + body.format)
+  if (!body.path) throw new Error('export necesita path absoluto')
+  app.commands.execute(command, diagram, body.path)
+  return { path: body.path, format: body.format }
+}
+
 exports.ref = ref
 exports.resolve = resolve
 exports.createDiagram = createDiagram
 exports.create = create
 exports.update = update
 exports.query = query
+exports.layout = layout
+exports.exportDiagram = exportDiagram

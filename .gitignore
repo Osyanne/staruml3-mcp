@@ -8,3 +8,5 @@ build/
 Thumbs.db
 coverage/
 *.tsbuildinfo
+smoke-out.png
+smoke-evidencia.png

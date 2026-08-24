@@ -86,6 +86,16 @@ try {
     console.error('FALLO: el rename no se aplico'); process.exit(1)
   }
 
+  const lay = await call('/layout', { diagramId: dg.data._id })
+  if (!lay.ok) { console.error('layout FALLO', lay); process.exit(1) }
+
+  const out = join(process.cwd(), 'smoke-out.png')
+  const exp = await call('/export', { diagramId: dg.data._id, format: 'png', path: out })
+  if (!exp.ok) { console.error('export FALLO', exp); process.exit(1) }
+  const { statSync } = await import('node:fs')
+  console.log('png exportado:', statSync(out).size, 'bytes')
+  if (statSync(out).size < 1000) { console.error('FALLO: png sospechosamente chico'); process.exit(1) }
+
   console.log('OK')
 } catch (err) {
   if (err && err.code === 'ENOENT') {

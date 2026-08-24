@@ -20,7 +20,9 @@ function init () {
       '/create-diagram': function (body) { return handlers.createDiagram(body) },
       '/create': function (body) { return handlers.create(body) },
       '/update': function (body) { return handlers.update(body) },
-      '/query': function (body) { return handlers.query(body) }
+      '/query': function (body) { return handlers.query(body) },
+      '/layout': function (body) { return handlers.layout(body) },
+      '/export': function (body) { return handlers.exportDiagram(body) }
     }
     // El log de "escuchando" vive en server.js, dentro del handler de
     // 'listening': ahi es donde realmente es cierto. Aca solo nos importa
