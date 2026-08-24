@@ -63,7 +63,7 @@ debe requerir tocarla.
 
 ## Componente 1 — extensión `mcp-bridge`
 
-Seis endpoints, todos `POST` con cuerpo JSON.
+Siete endpoints, todos `POST` con cuerpo JSON.
 
 | Endpoint | Mapea a |
 |---|---|
@@ -73,6 +73,7 @@ Seis endpoints, todos `POST` con cuerpo JSON.
 | `/update` | `app.engine.setProperty(elem, field, value)` |
 | `/query` | `app.repository.select / find / getInstancesOf` |
 | `/export` | `app.commands.execute('project:export-diagram-to-png', diagram, fullPath)` |
+| `/layout` | `diagram.layout(direction, separations)` — endpoint propio porque es método de `Diagram`, no comando |
 
 `/introspect` es lo que habilita el enfoque genérico: en vez de hardcodear los 123 tipos
 creables, la extensión los reporta en vivo desde los registries de la factory. Extensiones
