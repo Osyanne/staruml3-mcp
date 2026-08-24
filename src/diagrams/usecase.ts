@@ -104,6 +104,43 @@ function ordenarPorActor (spec: UseCaseDiagramSpec): string[] {
 }
 
 /**
+ * Reordena para que cada par unido por include/extend quede adyacente en la
+ * columna: si origen y destino no estan uno al lado del otro, mueve el
+ * destino a la posicion inmediatamente posterior al origen. Con todos los
+ * casos en una sola columna centrada en x, una relacion entre posiciones
+ * lejanas dibuja una linea vertical larga que atraviesa los ovalos
+ * intermedios y les tapa el texto con la etiqueta (bug real, ver
+ * uc-stress.png). Adyacencia = distancia 1 en cualquier direccion: lo que
+ * importa para el dibujo es que la linea sea corta, no el sentido de la
+ * flecha.
+ *
+ * Termina siempre porque es UNA pasada sobre `relaciones` (lista finita) sin
+ * reintentos ni fixpoint: cada relacion se procesa una sola vez y cada paso
+ * hace un solo splice de costo O(n). Una cadena (A incluye B, B incluye C)
+ * o un ciclo (A incluye B, B incluye C, C incluye A) no cambian esto — el
+ * ciclo simplemente deja el ultimo par sin poder quedar adyacente si eso
+ * rompe la adyacencia de un par anterior, pero la funcion retorna igual.
+ */
+function ordenarPorAdyacencia (orden: string[], relaciones: UseCaseRelationSpec[]): string[] {
+  const resultado = [...orden]
+
+  for (const rel of relaciones) {
+    if (rel.type !== 'include' && rel.type !== 'extend') continue
+
+    const iFrom = resultado.indexOf(rel.from)
+    const iTo = resultado.indexOf(rel.to)
+    if (iFrom === -1 || iTo === -1) continue // no deberia pasar: ya validado
+    if (Math.abs(iFrom - iTo) === 1) continue // ya adyacentes
+
+    resultado.splice(iTo, 1)
+    const iFromNuevo = resultado.indexOf(rel.from)
+    resultado.splice(iFromNuevo + 1, 0, rel.to)
+  }
+
+  return resultado
+}
+
+/**
  * Traduce intencion a primitivas del bridge, calculando toda la geometria.
  *
  * A diferencia de planClassDiagram, aca NO se delega en dagre: el recuadro del
@@ -135,7 +172,7 @@ export function planUseCaseDiagram (spec: UseCaseDiagramSpec): UseCaseDiagramOps
   // El orden se reacomoda por actor asociado (reduce cruces); el ancho es el
   // maximo estimado entre todos los nombres, para que la columna quede
   // alineada y el recuadro sea un rectangulo limpio (ver estimateUcWidth).
-  const ordenados = ordenarPorActor(spec)
+  const ordenados = ordenarPorAdyacencia(ordenarPorActor(spec), spec.relationships)
   const ucWidth = ordenados.reduce((max, nombre) => Math.max(max, estimateUcWidth(nombre)), UC_W_MIN)
   const filas = spec.useCases.length
 

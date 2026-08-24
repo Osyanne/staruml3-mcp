@@ -169,4 +169,113 @@ describe('planUseCaseDiagram', () => {
     })
     expect(ops.useCases.map(u => u.name)).toEqual(['Comprar', 'Pagar', 'SinActor'])
   })
+
+  function posicion (ops: ReturnType<typeof planUseCaseDiagram>, nombre: string): number {
+    return ops.useCases.findIndex(u => u.name === nombre)
+  }
+
+  it('un par unido por include queda adyacente aunque el orden por actor los separe', () => {
+    const ops = planUseCaseDiagram({
+      name: 'Académico',
+      actors: ['Estudiante', 'Docente'],
+      useCases: ['Autenticarse', 'Matricularse', 'Calificar'],
+      relationships: [
+        { type: 'association', from: 'Estudiante', to: 'Matricularse' },
+        { type: 'association', from: 'Docente', to: 'Calificar' },
+        // Sin esto, el orden por actor deja 'Matricularse' y 'Calificar'
+        // adyacentes, y 'Autenticarse' (sin actor) al final, lejos de
+        // 'Matricularse'.
+        { type: 'include', from: 'Matricularse', to: 'Autenticarse' }
+      ]
+    })
+    const iFrom = posicion(ops, 'Matricularse')
+    const iTo = posicion(ops, 'Autenticarse')
+    expect(Math.abs(iFrom - iTo)).toBe(1)
+  })
+
+  it('un par unido por extend queda adyacente aunque el orden por actor los separe', () => {
+    const ops = planUseCaseDiagram({
+      name: 'Académico',
+      actors: ['Estudiante', 'Docente', 'Secretaría'],
+      // El orden por actor deja 'Matricularse', 'Calificar', 'Emitir
+      // certificado' en fila y a 'Notificar en riesgo' (sin actor) al
+      // final, separado de 'Calificar' por 'Emitir certificado' — asi el
+      // test ejercita el splice, no un caso que ya salia adyacente.
+      useCases: ['Notificar en riesgo', 'Matricularse', 'Calificar', 'Emitir certificado'],
+      relationships: [
+        { type: 'association', from: 'Estudiante', to: 'Matricularse' },
+        { type: 'association', from: 'Docente', to: 'Calificar' },
+        { type: 'association', from: 'Secretaría', to: 'Emitir certificado' },
+        { type: 'extend', from: 'Notificar en riesgo', to: 'Calificar' }
+      ]
+    })
+    const iFrom = posicion(ops, 'Notificar en riesgo')
+    const iTo = posicion(ops, 'Calificar')
+    expect(Math.abs(iFrom - iTo)).toBe(1)
+  })
+
+  it('una cadena A incluye B incluye C no rompe ni cicla, y deja ambos pares adyacentes', () => {
+    const ops = planUseCaseDiagram({
+      ...base,
+      actors: ['Cliente'],
+      useCases: ['C', 'A', 'B'],
+      relationships: [
+        { type: 'include', from: 'A', to: 'B' },
+        { type: 'include', from: 'B', to: 'C' }
+      ]
+    })
+    const iA = posicion(ops, 'A')
+    const iB = posicion(ops, 'B')
+    const iC = posicion(ops, 'C')
+    expect(Math.abs(iA - iB)).toBe(1)
+    expect(Math.abs(iB - iC)).toBe(1)
+  })
+
+  it('un ciclo A incluye B incluye C incluye A termina sin colgarse', () => {
+    const ops = planUseCaseDiagram({
+      ...base,
+      actors: ['Cliente'],
+      useCases: ['C', 'A', 'B'],
+      relationships: [
+        { type: 'include', from: 'A', to: 'B' },
+        { type: 'include', from: 'B', to: 'C' },
+        { type: 'include', from: 'C', to: 'A' }
+      ]
+    })
+    // Con un ciclo no hay orden perfecto (algun par queda no-adyacente);
+    // lo unico que se puede exigir es que la funcion retorne y produzca
+    // un layout valido con las 3 entradas.
+    expect(ops.useCases.map(u => u.name).sort()).toEqual(['A', 'B', 'C'])
+  })
+
+  it('reordenar por adyacencia no pierde ni duplica casos de uso', () => {
+    const ops = planUseCaseDiagram({
+      name: 'Académico',
+      actors: ['Estudiante', 'Docente', 'Secretaría'],
+      useCases: [
+        'Autenticarse', 'Consultar récord', 'Matricularse', 'Validar prerrequisitos',
+        'Registrar calificaciones', 'Generar reporte', 'Emitir certificado',
+        'Gestionar cupos', 'Notificar riesgo'
+      ],
+      relationships: [
+        { type: 'association', from: 'Estudiante', to: 'Consultar récord' },
+        { type: 'association', from: 'Estudiante', to: 'Matricularse' },
+        { type: 'association', from: 'Docente', to: 'Registrar calificaciones' },
+        { type: 'association', from: 'Secretaría', to: 'Emitir certificado' },
+        { type: 'association', from: 'Secretaría', to: 'Gestionar cupos' },
+        { type: 'include', from: 'Matricularse', to: 'Validar prerrequisitos' },
+        { type: 'include', from: 'Consultar récord', to: 'Autenticarse' },
+        { type: 'extend', from: 'Notificar riesgo', to: 'Registrar calificaciones' }
+      ]
+    })
+    const nombresEntrada = [
+      'Autenticarse', 'Consultar récord', 'Matricularse', 'Validar prerrequisitos',
+      'Registrar calificaciones', 'Generar reporte', 'Emitir certificado',
+      'Gestionar cupos', 'Notificar riesgo'
+    ]
+    const nombresSalida = ops.useCases.map(u => u.name)
+    expect(nombresSalida).toHaveLength(nombresEntrada.length)
+    expect(new Set(nombresSalida).size).toBe(nombresEntrada.length)
+    expect(new Set(nombresSalida)).toEqual(new Set(nombresEntrada))
+  })
 })
