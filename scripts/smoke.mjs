@@ -5,6 +5,9 @@ const PORT = 39876
 const TIMEOUT_MS = 5000
 const tokenFile = join(process.env.APPDATA, 'StarUML', 'mcp-bridge-token')
 
+// Variable de modulo: las tareas siguientes reutilizan el diagrama creado aca.
+let dg
+
 export async function call (endpoint, body = {}) {
   const token = readFileSync(tokenFile, 'utf8').trim()
   const res = await fetch('http://127.0.0.1:' + PORT + endpoint, {
@@ -30,6 +33,10 @@ try {
   if (!types.data.modelAndView.includes('UMLClass')) {
     console.error('FALLO: UMLClass no esta en la lista'); process.exit(1)
   }
+
+  dg = await call('/create-diagram', { id: 'UMLClassDiagram', name: 'Smoke' })
+  if (!dg.ok) { console.error('create-diagram FALLO', dg); process.exit(1) }
+  console.log('diagrama creado:', dg.data._id, dg.data.name)
 
   console.log('OK')
 } catch (err) {
