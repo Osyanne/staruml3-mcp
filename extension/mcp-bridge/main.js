@@ -1,4 +1,5 @@
 var server = require('./server')
+var handlers = require('./handlers')
 
 var instance = null
 
@@ -14,7 +15,8 @@ function init () {
           node: process.versions.node,
           project: project ? project.name : null
         }
-      }
+      },
+      '/introspect': function () { return handlers.introspect() }
     }
     // El log de "escuchando" vive en server.js, dentro del handler de
     // 'listening': ahi es donde realmente es cierto. Aca solo nos importa

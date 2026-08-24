@@ -22,6 +22,15 @@ try {
   const health = await call('/health')
   console.log('health:', JSON.stringify(health))
   if (!health.ok) { console.error('FALLO'); process.exit(1) }
+
+  const types = await call('/introspect')
+  if (!types.ok) { console.error('introspect FALLO', types); process.exit(1) }
+  console.log('diagramas:', types.data.diagrams.length)
+  console.log('modelAndView:', types.data.modelAndView.length)
+  if (!types.data.modelAndView.includes('UMLClass')) {
+    console.error('FALLO: UMLClass no esta en la lista'); process.exit(1)
+  }
+
   console.log('OK')
 } catch (err) {
   if (err && err.code === 'ENOENT') {
