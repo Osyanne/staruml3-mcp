@@ -45,13 +45,63 @@ const FACTORY_ID: Record<UseCaseRelationKind, string> = {
 const ACTOR_W = 80
 const ACTOR_H = 100
 const ACTOR_X = 40
-const UC_W = 170
+const UC_W_MIN = 170        // piso: nunca mas angosto que esto, aunque el nombre sea corto
 const UC_H = 60
 const V_GAP = 45
 const PAD = 45              // margen interno del recuadro
 const BOUNDARY_X = 220
 const TOP = 60
-const MAX_ROWS = 6          // a partir de aca se abre una segunda columna
+
+/**
+ * Estima el ancho que StarUML le va a dar al ovalo de un caso de uso.
+ *
+ * StarUML agranda el ovalo para que el texto entre, ignorando el x2 que le
+ * pasamos por el bridge — asi que si calculamos el layout con un ancho fijo,
+ * los nombres largos terminan pisando la columna de al lado (bug real,
+ * reproducido con uc-stress.mjs). Esta formula es una calibracion empirica,
+ * no una medida exacta del motor de texto de StarUML:
+ *
+ *   Medido sobre un PNG exportado real (uc-stress.png):
+ *     - "Generar reporte consolidado de notas por período" (47 caracteres)
+ *       renderizo ~460px de ancho. Formula: 47*9+30 = 453.
+ *     - Un nombre de 26 caracteres renderizo ~238px.
+ *       Formula: 26*9+30 = 264.
+ *   9px/caracter + 30px de margen sobreestima levemente en ambos casos, lo
+ *   cual es intencional: preferimos aire de mas a superposicion.
+ */
+function estimateUcWidth (nombre: string): number {
+  return Math.max(UC_W_MIN, nombre.length * 9 + 30)
+}
+
+/**
+ * Ordena los casos de uso para reducir cruces de asociaciones: cada caso pasa
+ * a estar cerca del actor que lo usa. El criterio es el indice (en
+ * spec.actors) del primer actor —en el orden de spec.actors, no el orden de
+ * las relaciones— que tiene una asociacion con ese caso. Los casos sin actor
+ * asociado van al final. El sort es estable: dos casos del mismo actor (o
+ * ambos sin actor) conservan el orden relativo del input.
+ *
+ * Nota: esto cambia el orden de ops.useCases respecto de spec.useCases.
+ */
+function ordenarPorActor (spec: UseCaseDiagramSpec): string[] {
+  const actorIndex = new Map(spec.actors.map((a, i) => [a, i]))
+  const primerActor = new Map<string, number>()
+
+  for (const actor of spec.actors) {
+    const i = actorIndex.get(actor)!
+    for (const rel of spec.relationships) {
+      if (rel.type !== 'association') continue
+      const caso = rel.from === actor ? rel.to : rel.to === actor ? rel.from : null
+      if (caso === null) continue
+      if (!primerActor.has(caso)) primerActor.set(caso, i)
+    }
+  }
+
+  return spec.useCases
+    .map((nombre, i) => ({ nombre, i, orden: primerActor.get(nombre) ?? Infinity }))
+    .sort((a, b) => a.orden - b.orden || a.i - b.i)
+    .map(x => x.nombre)
+}
 
 /**
  * Traduce intencion a primitivas del bridge, calculando toda la geometria.
@@ -81,30 +131,31 @@ export function planUseCaseDiagram (spec: UseCaseDiagramSpec): UseCaseDiagramOps
 
   validarRelaciones(spec.relationships, actores, casos)
 
-  // --- Casos de uso: una o dos columnas, dentro del recuadro ---
-  const filas = Math.min(spec.useCases.length, MAX_ROWS)
-  const columnas = Math.ceil(spec.useCases.length / MAX_ROWS) || 1
+  // --- Casos de uso: una sola columna, ancho uniforme, dentro del recuadro ---
+  // El orden se reacomoda por actor asociado (reduce cruces); el ancho es el
+  // maximo estimado entre todos los nombres, para que la columna quede
+  // alineada y el recuadro sea un rectangulo limpio (ver estimateUcWidth).
+  const ordenados = ordenarPorActor(spec)
+  const ucWidth = ordenados.reduce((max, nombre) => Math.max(max, estimateUcWidth(nombre)), UC_W_MIN)
+  const filas = spec.useCases.length
 
-  const useCases: NodeOp[] = spec.useCases.map((nombre, i) => {
-    const col = Math.floor(i / MAX_ROWS)
-    const fila = i % MAX_ROWS
-    const x1 = BOUNDARY_X + PAD + col * (UC_W + 60)
+  const useCases: NodeOp[] = ordenados.map((nombre, fila) => {
+    const x1 = BOUNDARY_X + PAD
     const y1 = TOP + PAD + fila * (UC_H + V_GAP)
-    return { id: 'UMLUseCase', name: nombre, x1, y1, x2: x1 + UC_W, y2: y1 + UC_H }
+    return { id: 'UMLUseCase', name: nombre, x1, y1, x2: x1 + ucWidth, y2: y1 + UC_H }
   })
 
   // --- Recuadro: envuelve a los casos de uso con margen ---
   let boundary: NodeOp | null = null
   const etiqueta = spec.boundary === undefined ? spec.name : spec.boundary
   if (etiqueta !== null && spec.useCases.length > 0) {
-    const anchoTotal = columnas * UC_W + (columnas - 1) * 60
     const altoTotal = filas * UC_H + (filas - 1) * V_GAP
     boundary = {
       id: 'UMLUseCaseSubject',
       name: etiqueta,
       x1: BOUNDARY_X,
       y1: TOP,
-      x2: BOUNDARY_X + anchoTotal + PAD * 2,
+      x2: BOUNDARY_X + ucWidth + PAD * 2,
       y2: TOP + altoTotal + PAD * 2
     }
   }
