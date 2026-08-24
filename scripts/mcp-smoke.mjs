@@ -81,12 +81,12 @@ async function main () {
   const nombres = tools.map(t => t.name)
   console.log('tools:', nombres.join(', '))
 
-  const esperados = ['describe_types', 'list_diagrams', 'generate_diagram', 'edit_element', 'export_diagram']
+  const esperados = ['describe_types', 'list_diagrams', 'generate_diagram', 'edit_element', 'export_diagram', 'generate_use_case_diagram']
   const faltan = esperados.filter(n => !nombres.includes(n))
   if (faltan.length > 0) {
     throw new Error('FALLO: faltan tools: ' + faltan.join(', '))
   }
-  console.log('OK: los 5 tools esperados estan presentes')
+  console.log('OK: los 6 tools esperados estan presentes')
 
   const gen = tools.find(t => t.name === 'generate_diagram')
   const props = gen?.inputSchema?.properties ?? {}
@@ -99,6 +99,18 @@ async function main () {
     throw new Error('FALLO: generate_diagram.inputSchema le faltan propiedades: ' + faltanProps.join(', '))
   }
   console.log('OK: generate_diagram.inputSchema tiene name, classes y relationships')
+
+  const uc = tools.find(t => t.name === 'generate_use_case_diagram')
+  const ucProps = uc?.inputSchema?.properties ?? {}
+  const ucPropNames = Object.keys(ucProps)
+  console.log('generate_use_case_diagram.inputSchema.properties:', ucPropNames.join(', '))
+
+  const ucRequeridas = ['name', 'actors', 'useCases', 'relationships']
+  const ucFaltanProps = ucRequeridas.filter(p => !ucPropNames.includes(p))
+  if (ucFaltanProps.length > 0) {
+    throw new Error('FALLO: generate_use_case_diagram.inputSchema le faltan propiedades: ' + ucFaltanProps.join(', '))
+  }
+  console.log('OK: generate_use_case_diagram.inputSchema tiene name, actors, useCases y relationships')
 
   console.log('SMOKE OK')
   return { success: true }

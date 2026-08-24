@@ -4,6 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { call, BridgeError } from './bridge.js'
 import { planClassDiagram } from './diagrams/class.js'
+import { planUseCaseDiagram } from './diagrams/usecase.js'
 
 interface Ref { _id: string; _type: string; name: string | null }
 
@@ -95,6 +96,78 @@ server.registerTool(
     await call('/layout', { diagramId: diagram._id })
 
     return `Diagrama "${spec.name}" creado (${ops.classes.length} clases, ` +
+           `${ops.relationships.length} relaciones). id=${diagram._id}`
+  })
+)
+
+server.registerTool(
+  'generate_use_case_diagram',
+  {
+    description:
+      'Crea un diagrama de casos de uso completo en StarUML: actores, casos de uso, ' +
+      'recuadro del sistema y relaciones.',
+    inputSchema: {
+      name: z.string().describe('Nombre del diagrama'),
+      actors: z.array(z.string()).describe('Ej: ["Cliente", "Administrador"]'),
+      useCases: z.array(z.string()).describe('Ej: ["Registrar pedido", "Pagar"]'),
+      boundary: z.string().nullable().optional().describe(
+        'Etiqueta del recuadro del sistema. null lo omite. Por defecto usa el nombre del diagrama.'
+      ),
+      relationships: z.array(z.object({
+        type: z.enum(['association', 'include', 'extend', 'generalization']).describe(
+          'association: entre un actor y un caso de uso. ' +
+          'include: de un caso base a uno que siempre incluye. ' +
+          'extend: del caso que extiende hacia el caso base. ' +
+          'generalization: del hijo hacia el padre.'
+        ),
+        from: z.string(),
+        to: z.string()
+      })).default([])
+    }
+  },
+  async (spec) => safe(async () => {
+    const ops = planUseCaseDiagram(spec)
+
+    const diagram = await call<Ref>('/create-diagram', {
+      id: 'UMLUseCaseDiagram',
+      name: spec.name
+    })
+
+    // El recuadro va PRIMERO para que quede detras: si se crea despues, se
+    // dibuja encima y tapa los casos de uso.
+    if (ops.boundary) {
+      await call('/create', {
+        id: ops.boundary.id,
+        diagramId: diagram._id,
+        name: ops.boundary.name,
+        x1: ops.boundary.x1, y1: ops.boundary.y1,
+        x2: ops.boundary.x2, y2: ops.boundary.y2
+      })
+    }
+
+    const vistas = new Map<string, string>()
+    for (const nodo of [...ops.actors, ...ops.useCases]) {
+      const creado = await call<{ view: Ref; model: Ref }>('/create', {
+        id: nodo.id, diagramId: diagram._id, name: nodo.name,
+        x1: nodo.x1, y1: nodo.y1, x2: nodo.x2, y2: nodo.y2
+      })
+      vistas.set(nodo.name, creado.view._id)
+    }
+
+    for (const r of ops.relationships) {
+      await call('/create', {
+        id: r.id,
+        diagramId: diagram._id,
+        tailId: vistas.get(r.from),
+        headId: vistas.get(r.to)
+      })
+    }
+
+    // Sin /layout a proposito: la geometria ya esta calculada y dagre
+    // desarmaria el recuadro.
+
+    return `Diagrama de casos de uso "${spec.name}" creado ` +
+           `(${ops.actors.length} actores, ${ops.useCases.length} casos de uso, ` +
            `${ops.relationships.length} relaciones). id=${diagram._id}`
   })
 )
