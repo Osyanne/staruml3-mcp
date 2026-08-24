@@ -27,6 +27,20 @@ infirió de que Electron 1.7 lo trae en `true` por defecto y `window.js:39` no p
 
 Si la Tarea 1 falla, **no sigas con la Tarea 2.** La arquitectura entera se cae.
 
+## Si rompés StarUML
+
+Una extensión que tira en `init()` puede dejar la app inutilizable, y StarUML 3 **no tiene
+modo seguro alcanzable**: existe un parámetro `reloadWithoutUserExts` en
+`extension-loader.js:316`, pero ningún comando ni menú lo dispara.
+
+La única salida es borrar la extensión desde afuera y reabrir:
+
+```bash
+rm -rf "$APPDATA/StarUML/extensions/user/mcp-bridge"
+```
+
+Vale la pena tener esto a mano antes de empezar la Tarea 1, no después.
+
 ## Estructura de archivos
 
 ```
