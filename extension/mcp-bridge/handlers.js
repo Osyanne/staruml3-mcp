@@ -40,6 +40,34 @@ function createDiagram (body) {
   return ref(diagram)
 }
 
+// Setter generico por ruta ("end1.navigable") sobre un modelo ya creado. El
+// bridge no sabe que significa la ruta ni por que alguien la pide: esa
+// semantica (UMLAssociation, Directed Association, lo que sea) vive del lado
+// del cliente MCP. Aca solo caminamos el objeto y asignamos, pasando por
+// app.engine.setProperty para que quede en el historial de undo, igual que
+// update().
+function applyModelInit (model, modelInit) {
+  var paths = Object.keys(modelInit)
+  for (var i = 0; i < paths.length; i++) {
+    var path = paths[i]
+    var parts = path.split('.')
+    var target = model
+    var recorrido = []
+    for (var j = 0; j < parts.length - 1; j++) {
+      recorrido.push(parts[j])
+      target = target[parts[j]]
+      if (!target) {
+        throw new Error(
+          'modelInit: la ruta "' + recorrido.join('.') + '" no existe en el elemento ' +
+          'recien creado (ruta completa: "' + path + '")'
+        )
+      }
+    }
+    var field = parts[parts.length - 1]
+    app.engine.setProperty(target, field, modelInit[path])
+  }
+}
+
 // Un solo endpoint para nodos y relaciones. La diferencia la marca la presencia
 // de tailId/headId, que son ids de VISTA (no de modelo): las relaciones se
 // dibujan entre vistas.
@@ -71,6 +99,12 @@ function create (body) {
 
   var view = app.factory.createModelAndView(options)
   if (!view) throw new Error('createModelAndView devolvio null para id=' + body.id)
+
+  // Despues de crear: los ends de una relacion (end1, end2) no existen hasta
+  // que el elemento esta creado, asi que modelInit no puede ir en el
+  // modelInitializer de arriba.
+  if (body.modelInit) applyModelInit(view.model, body.modelInit)
+
   return { view: ref(view), model: ref(view.model) }
 }
 

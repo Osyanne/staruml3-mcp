@@ -13,6 +13,24 @@ export interface UseCaseDiagramSpec {
   relationships: UseCaseRelationSpec[]
   /** Etiqueta del recuadro del sistema. `null` lo omite. Por defecto usa `name`. */
   boundary?: string | null
+  /**
+   * Si las asociaciones actor<->caso de uso llevan punta de flecha (hacia el
+   * caso de uso) o son lineas simples.
+   *
+   * Por defecto `true`, DELIBERADAMENTE en contra de la convencion UML
+   * estricta (donde una asociacion simple, sin flecha, es lo canonico y
+   * "Directed Association" es la variante explicita). Se eligio `true` como
+   * default porque es la convencion que pide la materia para la que se
+   * construyo este generador: la flecha aclara quien "usa" a quien, y en la
+   * practica evita que el profesor la pida como correccion. Quien necesite
+   * el default estricto de UML puede pasar `false`.
+   *
+   * En StarUML 3 "Directed Association" no es un tipo de elemento aparte:
+   * es un UMLAssociation con `end1.navigable = false` (ver toolbox/uml.json
+   * del app.asar). Por eso esto no cambia `id` en FACTORY_ID, sino que
+   * agrega un `modelInit` a la relacion.
+   */
+  directedAssociations?: boolean
 }
 
 export interface NodeOp {
@@ -25,6 +43,8 @@ export interface UseCaseRelationOp {
   id: string
   from: string
   to: string
+  /** Rutas por punto a aplicar sobre el modelo tras crearlo (ver /create del bridge). */
+  modelInit?: Record<string, unknown>
 }
 
 export interface UseCaseDiagramOps {
@@ -207,11 +227,18 @@ export function planUseCaseDiagram (spec: UseCaseDiagramSpec): UseCaseDiagramOps
     return { id: 'UMLActor', name: nombre, x1: ACTOR_X, y1, x2: ACTOR_X + ACTOR_W, y2: y1 + ACTOR_H }
   })
 
-  const relationships: UseCaseRelationOp[] = spec.relationships.map(r => ({
-    id: FACTORY_ID[r.type],
-    from: r.from,
-    to: r.to
-  }))
+  const directedAssociations = spec.directedAssociations !== false
+
+  const relationships: UseCaseRelationOp[] = spec.relationships.map(r => {
+    const op: UseCaseRelationOp = { id: FACTORY_ID[r.type], from: r.from, to: r.to }
+    // Solo association lleva modelInit: es la unica relacion cuya "direccion"
+    // es ambigua sin flecha (include/extend/generalization ya la marcan con
+    // su propia notacion grafica).
+    if (r.type === 'association' && directedAssociations) {
+      op.modelInit = { 'end1.navigable': false }
+    }
+    return op
+  })
 
   return { boundary, actors: actorsOps, useCases, relationships }
 }

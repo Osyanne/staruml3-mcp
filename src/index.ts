@@ -113,6 +113,12 @@ server.registerTool(
       boundary: z.string().nullable().optional().describe(
         'Etiqueta del recuadro del sistema. null lo omite. Por defecto usa el nombre del diagrama.'
       ),
+      directedAssociations: z.boolean().optional().describe(
+        'Si las asociaciones actor-caso de uso llevan punta de flecha hacia el caso de uso ' +
+        '(Directed Association en StarUML) en vez de ser lineas simples sin flecha. ' +
+        'Por defecto true. La convencion UML estricta usa false (asociacion simple); ' +
+        'true es mas explicito sobre quien "usa" a quien y suele ser lo que pide un profesor.'
+      ),
       relationships: z.array(z.object({
         type: z.enum(['association', 'include', 'extend', 'generalization']).describe(
           'association: entre un actor y un caso de uso. ' +
@@ -159,7 +165,8 @@ server.registerTool(
         id: r.id,
         diagramId: diagram._id,
         tailId: vistas.get(r.from),
-        headId: vistas.get(r.to)
+        headId: vistas.get(r.to),
+        ...(r.modelInit ? { modelInit: r.modelInit } : {})
       })
     }
 

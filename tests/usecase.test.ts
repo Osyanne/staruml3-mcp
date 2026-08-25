@@ -248,6 +248,39 @@ describe('planUseCaseDiagram', () => {
     expect(ops.useCases.map(u => u.name).sort()).toEqual(['A', 'B', 'C'])
   })
 
+  it('por defecto, una asociacion lleva modelInit para que sea dirigida (end1.navigable false)', () => {
+    const ops = planUseCaseDiagram({
+      ...base,
+      relationships: [{ type: 'association', from: 'Cliente', to: 'Comprar' }]
+    })
+    expect(ops.relationships[0].modelInit).toEqual({ 'end1.navigable': false })
+  })
+
+  it('con directedAssociations:false, la asociacion no lleva modelInit', () => {
+    const ops = planUseCaseDiagram({
+      ...base,
+      directedAssociations: false,
+      relationships: [{ type: 'association', from: 'Cliente', to: 'Comprar' }]
+    })
+    expect(ops.relationships[0].modelInit).toBeUndefined()
+  })
+
+  it('include, extend y generalization nunca llevan modelInit, ni con el default activo', () => {
+    const ops = planUseCaseDiagram({
+      ...base,
+      actors: ['Cliente', 'Admin'],
+      useCases: ['Comprar', 'Pagar'],
+      relationships: [
+        { type: 'include', from: 'Comprar', to: 'Pagar' },
+        { type: 'extend', from: 'Pagar', to: 'Comprar' },
+        { type: 'generalization', from: 'Admin', to: 'Cliente' }
+      ]
+    })
+    for (const rel of ops.relationships) {
+      expect(rel.modelInit).toBeUndefined()
+    }
+  })
+
   it('reordenar por adyacencia no pierde ni duplica casos de uso', () => {
     const ops = planUseCaseDiagram({
       name: 'Académico',
