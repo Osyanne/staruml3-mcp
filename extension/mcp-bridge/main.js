@@ -22,7 +22,14 @@ function init () {
       '/update': function (body) { return handlers.update(body) },
       '/query': function (body) { return handlers.query(body) },
       '/layout': function (body) { return handlers.layout(body) },
-      '/export': function (body) { return handlers.exportDiagram(body) }
+      '/export': function (body) { return handlers.exportDiagram(body) },
+      '/delete': function (body) { return handlers.deleteElements(body) },
+      '/save': function (body) { return handlers.save(body) },
+      '/diagram': function (body) { return handlers.diagramContents(body) },
+      '/element': function (body) { return handlers.elementDetails(body) },
+      '/batch': function (body) { return handlers.batch(body) },
+      '/undo': function (body) { return handlers.undo(body) },
+      '/redo': function (body) { return handlers.redo(body) }
     }
     // El log de "escuchando" vive en server.js, dentro del handler de
     // 'listening': ahi es donde realmente es cierto. Aca solo nos importa

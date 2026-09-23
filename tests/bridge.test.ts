@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { BridgeError, mapBridgeFailure, call } from '../src/bridge.js'
+import { BridgeError, mapBridgeFailure, call, starumlUserDataDir } from '../src/bridge.js'
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
@@ -54,5 +54,21 @@ describe('call', () => {
 
     expect(caught).toBeInstanceOf(BridgeError)
     expect((caught as Error).message).toBe("Right-hand side of 'instanceof' is not an object")
+  })
+})
+
+describe('starumlUserDataDir', () => {
+  it('en Windows usa %APPDATA%', () => {
+    expect(starumlUserDataDir('win32', { APPDATA: 'C:\\Users\\u\\AppData\\Roaming' }, 'C:\\Users\\u'))
+      .toBe('C:\\Users\\u\\AppData\\Roaming\\StarUML')
+  })
+
+  it('en macOS usa Application Support', () => {
+    expect(starumlUserDataDir('darwin', {}, '/Users/u')).toBe('/Users/u/Library/Application Support/StarUML')
+  })
+
+  it('en Linux respeta XDG_CONFIG_HOME y si no usa ~/.config', () => {
+    expect(starumlUserDataDir('linux', { XDG_CONFIG_HOME: '/cfg' }, '/home/u')).toBe('/cfg/StarUML')
+    expect(starumlUserDataDir('linux', {}, '/home/u')).toBe('/home/u/.config/StarUML')
   })
 })
