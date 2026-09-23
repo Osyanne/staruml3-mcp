@@ -135,6 +135,8 @@ export function materializeSequenceDiagram (name: string, ops: SequenceDiagramOp
       id: f.id,
       ...caja(f),
       modelInit: {
+        // Sin esto StarUML le pone "CombinedFragment1" y lo muestra al lado del operador.
+        name: '',
         interactionOperator: f.interactionOperator,
         ...(primero?.guard ? { 'operands.0.guard': primero.guard } : {})
       }
@@ -142,6 +144,12 @@ export function materializeSequenceDiagram (name: string, ops: SequenceDiagramOp
     for (const op of resto) {
       b.member(frag, { id: 'UMLInteractionOperand', field: 'operands', ...(op.guard ? { modelInit: { guard: op.guard } } : {}) })
     }
+    // Las vistas de los operandos las crea StarUML al repintar (cada paso
+    // anterior dispara un repintado síncrono), en el orden de `operands`. Recién
+    // ahora existen y se les puede fijar el alto.
+    f.operandHeights?.forEach((h, i) => {
+      b.update(frag.view!, `operandCompartment.subViews.${i}.height`, h, `alto del operando ${i + 1} de ${f.interactionOperator}`)
+    })
   }
   return b
 }

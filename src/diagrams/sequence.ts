@@ -52,6 +52,13 @@ export interface FragmentOp {
   x2: number
   y2: number
   operands: Array<{ guard?: string }>
+  /**
+   * Alto de cada operando, en orden. StarUML los apila debajo de la pestaña y
+   * dibuja el separador punteado en el borde de cada uno; sin esto los reparte
+   * a su criterio y el separador cae en cualquier lado. Ausente si algún
+   * operando no cubre mensajes.
+   */
+  operandHeights?: number[]
 }
 
 export interface SequenceDiagramOps {
@@ -63,11 +70,21 @@ export interface SequenceDiagramOps {
 const LIFELINE_SPACING = 200
 const LIFELINE_TOP = 40
 const LIFELINE_WIDTH = 100
-const LIFELINE_HEIGHT = 60
+const LIFELINE_HEIGHT = 60   // cabecera: la caja con el nombre
+const LIFELINE_COLA = 40     // línea punteada que sigue debajo del último elemento
 
 const MESSAGE_START_Y = 130
 const MESSAGE_SPACING = 50
 const SELF_MESSAGE_OFFSET_Y = 20 // self-messages need a bit extra Y padding
+
+// Geometría de un fragmento combinado (UMLCombinedFragmentView e
+// UMLInteractionOperandView en el app.asar de StarUML 3.0.2).
+const FRAG_CABECERA = 25    // pestaña con el operador: texto + 5 + 5 de relleno
+const LUGAR_GUARDA = 40     // del borde de un operando a su primer mensaje: la guarda va 15 px abajo y mide ~13
+const DESPEJE = 30          // entre la flecha anterior y el borde o separador (las respuestas llevan el texto debajo)
+const FRAG_PAD_X = 40
+const FRAG_PAD_BOTTOM = 20
+const OPERANDO_MIN_H = 15   // minHeight de UMLInteractionOperandView
 
 export function planSequenceDiagram(spec: SequenceDiagramSpec): SequenceDiagramOps {
   if (!spec.lifelines || spec.lifelines.length === 0) {
@@ -131,11 +148,29 @@ export function planSequenceDiagram(spec: SequenceDiagramSpec): SequenceDiagramO
     lifelineX.set(ll.name, 50 + i * LIFELINE_SPACING + LIFELINE_WIDTH / 2)
   })
 
+  // Mensajes que abren un fragmento o un operando: antes de ellos hace falta
+  // lugar para la pestaña y la guarda, o quedan pisadas por la flecha.
+  const abreFragmento = new Set<number>()
+  const abreOperando = new Set<number>()
+  for (const frag of spec.fragments ?? []) {
+    frag.operands.forEach((op, k) => {
+      if (op.messageIndices.length === 0) return
+      ;(k === 0 ? abreFragmento : abreOperando).add(Math.min(...op.messageIndices))
+    })
+  }
+
   let currentY = MESSAGE_START_Y
+  let prevY = LIFELINE_TOP + LIFELINE_HEIGHT
   const messages: MessageOp[] = []
 
   if (spec.messages) {
-    for (const m of spec.messages) {
+    for (const [i, m] of spec.messages.entries()) {
+      if (abreFragmento.has(i)) {
+        currentY = Math.max(currentY, prevY + DESPEJE + FRAG_CABECERA + LUGAR_GUARDA)
+      } else if (abreOperando.has(i)) {
+        currentY = Math.max(currentY, prevY + DESPEJE + LUGAR_GUARDA)
+      }
+
       const modelInit: Record<string, unknown> = {}
       if (m.type && m.type !== 'synchCall') {
         modelInit.messageSort = m.type
@@ -164,9 +199,11 @@ export function planSequenceDiagram(spec: SequenceDiagramSpec): SequenceDiagramO
         modelInit: Object.keys(modelInit).length > 0 ? modelInit : undefined
       })
 
+      prevY = currentY
       currentY += MESSAGE_SPACING
       if (m.from === m.to) {
         currentY += SELF_MESSAGE_OFFSET_Y
+        prevY += SELF_MESSAGE_OFFSET_Y
       }
     }
   }
@@ -200,20 +237,50 @@ export function planSequenceDiagram(spec: SequenceDiagramSpec): SequenceDiagramO
         maxY = MESSAGE_START_Y + MESSAGE_SPACING
       }
 
-      const PAD_X = 40
-      const PAD_Y = 20
+      const y1 = minY - LUGAR_GUARDA - FRAG_CABECERA
+      const y2 = maxY + FRAG_PAD_BOTTOM
 
       fragments.push({
         id: 'UMLCombinedFragment',
         interactionOperator: frag.type,
-        x1: minX - PAD_X,
-        y1: minY - PAD_Y,
-        x2: maxX + PAD_X,
-        y2: maxY + PAD_Y,
-        operands: frag.operands.map(op => ({ guard: op.guard }))
+        x1: minX - FRAG_PAD_X,
+        y1,
+        x2: maxX + FRAG_PAD_X,
+        y2,
+        operands: frag.operands.map(op => ({ guard: op.guard })),
+        ...alturasDeOperandos(frag.operands, messages, y1, y2)
       })
     }
   }
 
+  // En StarUML y2 es el final de la línea punteada, no de la cabecera: la
+  // factory la estira a 200 px como mínimo y corre hacia arriba cualquier
+  // mensaje que caiga más abajo. Se alarga hasta pasar el último elemento.
+  const fondo = Math.max(
+    LIFELINE_TOP + LIFELINE_HEIGHT,
+    ...messages.map(m => m.y),
+    ...fragments.map(f => f.y2)
+  )
+  for (const ll of lifelines) ll.y2 = Math.max(ll.y2, fondo + LIFELINE_COLA)
+
   return { lifelines, messages, fragments }
+}
+
+/**
+ * El primer operando arranca bajo la pestaña; cada uno de los siguientes,
+ * LUGAR_GUARDA arriba de su primer mensaje. El último llega hasta el fondo.
+ */
+function alturasDeOperandos (
+  operands: Array<{ messageIndices: number[] }>,
+  messages: MessageOp[],
+  y1: number,
+  y2: number
+): { operandHeights?: number[] } {
+  if (operands.some(op => op.messageIndices.length === 0)) return {}
+  const primeros = operands.map(op => Math.min(...op.messageIndices.map(i => messages[i].y)))
+  const topes = [y1 + FRAG_CABECERA, ...primeros.slice(1).map(y => y - LUGAR_GUARDA)]
+  const alturas = topes.map((t, k) => (k + 1 < topes.length ? topes[k + 1] : y2) - t)
+  // Operandos fuera de orden o superpuestos: mejor que StarUML decida.
+  if (alturas.some(h => h < OPERANDO_MIN_H)) return {}
+  return { operandHeights: alturas }
 }

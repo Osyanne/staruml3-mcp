@@ -81,24 +81,24 @@ async function main () {
   const nombres = tools.map(t => t.name)
   console.log('tools:', nombres.join(', '))
 
-  const esperados = ['describe_types', 'list_diagrams', 'generate_diagram', 'edit_element', 'export_diagram', 'generate_use_case_diagram']
+  const esperados = ['describe_types', 'list_diagrams', 'generate_class_diagram', 'edit_element', 'export_diagram', 'generate_use_case_diagram']
   const faltan = esperados.filter(n => !nombres.includes(n))
   if (faltan.length > 0) {
     throw new Error('FALLO: faltan tools: ' + faltan.join(', '))
   }
   console.log('OK: los 6 tools esperados estan presentes')
 
-  const gen = tools.find(t => t.name === 'generate_diagram')
+  const gen = tools.find(t => t.name === 'generate_class_diagram')
   const props = gen?.inputSchema?.properties ?? {}
   const propNames = Object.keys(props)
-  console.log('generate_diagram.inputSchema.properties:', propNames.join(', '))
+  console.log('generate_class_diagram.inputSchema.properties:', propNames.join(', '))
 
   const requeridas = ['name', 'classes', 'relationships']
   const faltanProps = requeridas.filter(p => !propNames.includes(p))
   if (faltanProps.length > 0) {
-    throw new Error('FALLO: generate_diagram.inputSchema le faltan propiedades: ' + faltanProps.join(', '))
+    throw new Error('FALLO: generate_class_diagram.inputSchema le faltan propiedades: ' + faltanProps.join(', '))
   }
-  console.log('OK: generate_diagram.inputSchema tiene name, classes y relationships')
+  console.log('OK: generate_class_diagram.inputSchema tiene name, classes y relationships')
 
   const uc = tools.find(t => t.name === 'generate_use_case_diagram')
   const ucProps = uc?.inputSchema?.properties ?? {}

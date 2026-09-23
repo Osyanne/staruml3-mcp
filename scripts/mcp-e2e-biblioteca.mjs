@@ -1,5 +1,5 @@
 // Verificacion punta a punta contra StarUML real: arranca dist/index.js,
-// invoca generate_diagram con el caso "Biblioteca" y despues export_diagram
+// invoca generate_class_diagram con el caso "Biblioteca" y despues export_diagram
 // sobre el diagrama creado. Requiere StarUML corriendo con el bridge activo.
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -80,11 +80,11 @@ async function main () {
     ]
   }
 
-  const genResult = await callTool('generate_diagram', spec)
+  const genResult = await callTool('generate_class_diagram', spec)
   const genText = genResult.content?.[0]?.text ?? ''
-  console.log('generate_diagram ->', genText)
+  console.log('generate_class_diagram ->', genText)
   if (genResult.isError) {
-    throw new Error('generate_diagram devolvio isError=true: ' + genText)
+    throw new Error('generate_class_diagram devolvio isError=true: ' + genText)
   }
   const m = genText.match(/id=(\S+)/)
   if (!m) throw new Error('FALLO: no se pudo extraer el id del diagrama de la respuesta: ' + genText)

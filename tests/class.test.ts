@@ -62,7 +62,7 @@ describe('planClassDiagram', () => {
     expect(ops.relationships[0]).toMatchObject({ from: 'Empleado', to: 'Empleado' })
   })
 
-  it('interfaces: UMLInterface dibujada como caja con «interface», no como círculo', () => {
+  it('interfaces: UMLInterface dibujada como caja con «interface» y sus operaciones visibles', () => {
     const ops = planClassDiagram({
       name: 'X',
       classes: [{ name: 'Pagable', kind: 'interface', operations: ['pagar(): void'] }],
@@ -70,7 +70,9 @@ describe('planClassDiagram', () => {
     })
 
     expect(ops.classes[0].id).toBe('UMLInterface')
-    expect(ops.classes[0].viewInit).toEqual({ stereotypeDisplay: 'label' })
+    // StarUML crea la vista de interfaz con los compartimentos suprimidos: sin
+    // esto la operación existe en el modelo pero no se ve.
+    expect(ops.classes[0].viewInit).toEqual({ stereotypeDisplay: 'label', suppressAttributes: false, suppressOperations: false })
   })
 
   it('clases abstractas y estereotipos van al modelo', () => {

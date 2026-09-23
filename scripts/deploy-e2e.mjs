@@ -13,6 +13,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { statSync, readFileSync } from 'node:fs'
+import { starumlUserDataDir } from '../dist/bridge.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const entry = join(__dirname, '..', 'dist', 'index.js')
@@ -71,7 +72,7 @@ async function callTool (name, args) {
 }
 
 const PORT = 39876
-const token = readFileSync(join(process.env.APPDATA, 'StarUML', 'mcp-bridge-token'), 'utf8').trim()
+const token = readFileSync(join(starumlUserDataDir(), 'mcp-bridge-token'), 'utf8').trim()
 
 async function bridge (endpoint, body) {
   const res = await fetch(`http://127.0.0.1:${PORT}${endpoint}`, {
@@ -149,7 +150,7 @@ async function main () {
   const diagramId = m[1]
 
   // El arbol de MODELO: los componentes tienen que colgar del nodo, no del
-  // proyecto. Va directo al bridge porque ningun tool MCP expone /query.
+  // proyecto. Va directo al bridge porque ningun tool MCP expone /query con selector.
   // Es seguro: arriba ya comprobamos que el proyecto esta en blanco.
   await verificarArbol('Servidor UTA::@UMLComponent', ['MariaDB', 'Moodle'])
   await verificarArbol('Moodle::@UMLComponent', ['Backend', 'Frontend'])

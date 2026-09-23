@@ -82,7 +82,8 @@ describe('materializeSequenceDiagram', () => {
 
   it('el fragmento lleva operador y la guarda del primer operando (que StarUML crea solo)', () => {
     const [frag] = creados(b.steps, 'UMLCombinedFragment')
-    expect(frag.body.modelInit).toEqual({ interactionOperator: 'alt', 'operands.0.guard': 'credenciales válidas' })
+    // name '' evita el "CombinedFragment1" que StarUML le pone solo y muestra al lado de "alt"
+    expect(frag.body.modelInit).toEqual({ name: '', interactionOperator: 'alt', 'operands.0.guard': 'credenciales válidas' })
   })
 
   it('los operandos siguientes se crean dentro del fragmento con su guarda', () => {
@@ -93,6 +94,17 @@ describe('materializeSequenceDiagram', () => {
     expect(operandos[0].body).toMatchObject({
       parentId: { $ref: `${frag.as}.model._id` }, field: 'operands', modelInit: { guard: 'else' }
     })
+  })
+
+  it('después de crear los operandos fija la altura de cada uno sobre la vista del fragmento', () => {
+    const [frag] = creados(b.steps, 'UMLCombinedFragment')
+    const alturas = b.steps.filter(s => s.route === '/update' && String(s.body.field).startsWith('operandCompartment'))
+    const ultimoOperando = b.steps.indexOf(creados(b.steps, 'UMLInteractionOperand').at(-1)!)
+
+    expect(alturas.map(s => s.body)).toEqual(ops.fragments[0].operandHeights!.map((h, i) => ({
+      id: { $ref: `${frag.as}.view._id` }, field: `operandCompartment.subViews.${i}.height`, value: h
+    })))
+    expect(b.steps.indexOf(alturas[0])).toBeGreaterThan(ultimoOperando)
   })
 
   it('los mensajes van entre líneas de vida, a la altura planificada, y no hay layout', () => {

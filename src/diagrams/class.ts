@@ -79,11 +79,12 @@ const RELATION_FACTORY_ID: Record<Exclude<RelationKind, 'realization'>, string> 
 
 /**
  * Una interfaz se dibuja por defecto como el círculo del lollipop
- * (preferencia uml.interface.stereotypeDisplay = 'icon' en el app.asar), que
- * esconde atributos y operaciones. En un diagrama de clases lo que se espera
- * es la caja con «interface» arriba.
+ * (preferencia uml.interface.stereotypeDisplay = 'icon' en el app.asar) y con
+ * los compartimentos suprimidos: aunque se la pase a caja, sus operaciones
+ * existen en el modelo pero no se ven. En un diagrama de clases lo que se
+ * espera es la caja con «interface» arriba y sus miembros.
  */
-export const INTERFACE_VIEW_INIT = { stereotypeDisplay: 'label' }
+export const INTERFACE_VIEW_INIT = { stereotypeDisplay: 'label', suppressAttributes: false, suppressOperations: false }
 
 const BOX_W = 140
 const BOX_H = 90

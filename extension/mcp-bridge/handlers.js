@@ -234,9 +234,20 @@ function save (body) {
 
 var MEMBER_FIELDS = ['attributes', 'operations', 'literals']
 
+// Sin estas opciones getString (elements.js:921) devuelve solo el nombre: sin
+// visibilidad, sin tipo y sin parametros. Son las mismas que usa la vista de
+// una clase con la configuracion por defecto.
+var MEMBER_TEXT_OPTIONS = {
+  showVisibility: true,
+  showType: true,
+  showMultiplicity: true,
+  showOperationSignature: true,
+  showProperty: true
+}
+
 function memberText (member) {
   try {
-    if (typeof member.getString === 'function') return member.getString({})
+    if (typeof member.getString === 'function') return member.getString(MEMBER_TEXT_OPTIONS)
   } catch (err) {}
   return member.name
 }
@@ -430,7 +441,30 @@ function batch (body) {
   return { results: results, undoEntries: merged ? 1 : 0 }
 }
 
+// Lo mismo que Ctrl+Z / Ctrl+Y, sin pasar por el foco de la ventana. Devuelve
+// el nombre de la operacion (el label de un /batch, p. ej.) para que quien
+// llama vea que deshizo: si el usuario toco algo despues, es eso lo que se va.
+function topOf (stack) {
+  return stack && Array.isArray(stack.stack) ? stack.stack[stack.stack.length - 1] : undefined
+}
+
+function undo () {
+  var op = topOf(app.repository._undoStack)
+  if (!op) throw new Error('No hay nada para deshacer')
+  app.repository.undo()
+  return { undone: op.name || null }
+}
+
+function redo () {
+  var op = topOf(app.repository._redoStack)
+  if (!op) throw new Error('No hay nada para rehacer')
+  app.repository.redo()
+  return { redone: op.name || null }
+}
+
 exports.ref = ref
+exports.undo = undo
+exports.redo = redo
 exports.resolve = resolve
 exports.createDiagram = createDiagram
 exports.create = create

@@ -639,6 +639,37 @@ server.registerTool(
   })
 )
 
+server.registerTool(
+  'undo',
+  {
+    title: 'Deshacer',
+    description:
+      'Deshace la última operación del historial de StarUML, igual que Ctrl+Z. Un generate_* o un ' +
+      'add_to_diagram entero es UNA operación. Devuelve el nombre de lo que deshizo: si el usuario hizo algo ' +
+      'a mano después, se deshace eso primero.',
+    inputSchema: {},
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
+  },
+  async () => texto(async () => {
+    const { undone } = await call<{ undone: string | null }>('/undo')
+    return `Deshecho: ${undone ?? '(operación sin nombre)'}`
+  })
+)
+
+server.registerTool(
+  'redo',
+  {
+    title: 'Rehacer',
+    description: 'Rehace lo último que se deshizo, igual que Ctrl+Y.',
+    inputSchema: {},
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
+  },
+  async () => texto(async () => {
+    const { redone } = await call<{ redone: string | null }>('/redo')
+    return `Rehecho: ${redone ?? '(operación sin nombre)'}`
+  })
+)
+
 // ─────────────────────────── Guardar y exportar ───────────────────────────
 
 server.registerTool(

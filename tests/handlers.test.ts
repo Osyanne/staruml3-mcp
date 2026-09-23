@@ -97,6 +97,10 @@ function cargarHandlers (): Harness {
           harness.deshechas.push(op)
           redoStack.push(op)
         }
+      },
+      redo () {
+        const op = redoStack.pop() as Operation | undefined
+        if (op) undoStack.push(op)
       }
     },
     diagrams: {
@@ -345,8 +349,9 @@ describe('diagramContents() del bridge', () => {
     d._parent = new FakeElement('modelo-raiz', 'Model', 'UMLModel')
 
     const alumno = new FakeElement('m-alumno', 'Alumno', 'UMLClass')
+    let opcionesTexto: Record<string, unknown> = {}
     alumno.attributes = [Object.assign(new FakeElement('attr', 'nombre', 'UMLAttribute'), {
-      getString: () => '+nombre: string'
+      getString: (opts: Record<string, unknown>) => { opcionesTexto = opts; return '+nombre: string' }
     })]
     const vAlumno = Object.assign(new NodeView('v-alumno', null, 'UMLClassView'), {
       model: alumno, left: 10, top: 20, width: 140, height: 90
@@ -370,6 +375,8 @@ describe('diagramContents() del bridge', () => {
       bounds: { left: 10, top: 20, width: 140, height: 90 },
       members: [{ _id: 'attr', field: 'attributes', text: '+nombre: string' }]
     })
+    // Sin estas opciones StarUML omite visibilidad, tipo y firma (elements.js:921)
+    expect(opcionesTexto).toMatchObject({ showVisibility: true, showType: true, showOperationSignature: true })
     expect(r.views[1].containerViewId).toBe('v-alumno')
     expect(r.views[2]).toMatchObject({
       viewId: 'v-asoc',
@@ -522,5 +529,32 @@ describe('batch() del bridge', () => {
 
   it('exige al menos un paso', () => {
     expect(() => h.handlers.batch({ steps: [] })).toThrow(/steps/)
+  })
+})
+
+describe('undo() y redo() del bridge', () => {
+  it('deshace la última entrada y dice cuál fue', () => {
+    const h = cargarHandlers()
+    h.undoStack.push({ id: 'a', name: 'Diagrama de clases "X"', ops: [] })
+
+    expect(h.handlers.undo({})).toEqual({ undone: 'Diagrama de clases "X"' })
+    expect(h.undoStack.size()).toBe(0)
+    expect(h.redoStack.size()).toBe(1)
+  })
+
+  it('rehace lo último deshecho', () => {
+    const h = cargarHandlers()
+    h.undoStack.push({ id: 'a', name: 'lote', ops: [] })
+    h.handlers.undo({})
+
+    expect(h.handlers.redo({})).toEqual({ redone: 'lote' })
+    expect(h.undoStack.size()).toBe(1)
+  })
+
+  it('con el historial vacío falla en vez de no hacer nada en silencio', () => {
+    const h = cargarHandlers()
+
+    expect(() => h.handlers.undo({})).toThrow(/nada para deshacer/)
+    expect(() => h.handlers.redo({})).toThrow(/nada para rehacer/)
   })
 })

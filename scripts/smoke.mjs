@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { starumlUserDataDir } from '../dist/bridge.js'
 
 const PORT = 39876
 const TIMEOUT_MS = 5000
-const tokenFile = join(process.env.APPDATA, 'StarUML', 'mcp-bridge-token')
+const tokenFile = join(starumlUserDataDir(), 'mcp-bridge-token')
 
 // Variable de modulo: las tareas siguientes reutilizan el diagrama creado aca.
 let dg
