@@ -1,27 +1,36 @@
 {
   "name": "staruml3-mcp",
-  "version": "0.1.0",
-  "description": "Servidor MCP para **StarUML 3.0.2**.",
-  "main": "index.js",
-  "directories": {
-    "doc": "docs"
+  "version": "0.3.0",
+  "description": "Servidor MCP para StarUML 3.0.2: genera y edita diagramas UML desde un agente de IA.",
+  "type": "module",
+  "bin": {
+    "staruml3-mcp": "dist/index.js"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "scripts": {
     "test": "vitest run",
-    "build": "tsc"
+    "build": "tsc",
+    "install-extension": "node scripts/install-extension.mjs",
+    "e2e": "node scripts/mejoras-e2e.mjs"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Osyanne/staruml3-mcp.git"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "module",
   "bugs": {
     "url": "https://github.com/Osyanne/staruml3-mcp/issues"
   },
   "homepage": "https://github.com/Osyanne/staruml3-mcp#readme",
+  "keywords": [
+    "mcp",
+    "staruml",
+    "uml",
+    "model-context-protocol"
+  ],
+  "author": "",
+  "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^4.4.3"
@@ -30,8 +39,5 @@
     "@types/node": "^26.2.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"
-  },
-  "bin": {
-    "staruml3-mcp": "dist/index.js"
   }
 }
