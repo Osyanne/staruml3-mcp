@@ -47,7 +47,8 @@ export async function call<T> (endpoint: string, body: unknown = {}): Promise<T>
     const res = await fetch(`http://127.0.0.1:${PORT}${endpoint}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-mcp-token': token },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15_000)
     })
     payload = await res.json()
   } catch (err) {

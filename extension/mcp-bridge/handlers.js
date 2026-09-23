@@ -72,6 +72,21 @@ function applyModelInit (model, modelInit) {
 // de tailId/headId, que son ids de VISTA (no de modelo): las relaciones se
 // dibujan entre vistas.
 function create (body) {
+  if (body.field) {
+    var parent = resolve(body.parentId)
+    var model = app.factory.createModel({
+      id: body.id,
+      parent: parent,
+      field: body.field,
+      modelInitializer: function (createdModel) {
+        if (body.name) createdModel.name = body.name
+      }
+    })
+    if (!model) throw new Error('createModel devolvio null para id=' + body.id)
+    if (body.modelInit) applyModelInit(model, body.modelInit)
+    return { view: null, model: ref(model) }
+  }
+
   var diagram = body.diagramId ? resolve(body.diagramId) : app.diagrams.getCurrentDiagram()
   if (!diagram) throw new Error('No hay diagrama destino')
 
@@ -86,6 +101,15 @@ function create (body) {
     modelInitializer: function (model) {
       if (body.name) model.name = body.name
     }
+  }
+
+  // parentId y containerViewId son cosas distintas y pueden venir juntas:
+  // el primero decide quien es el DUENO en el arbol de modelo, el segundo
+  // quien es el contenedor en el DIBUJO. Un componente adentro de un nodo
+  // normalmente quiere los dos: sin containerView se ve adentro pero no esta
+  // contenido, y arrastrar el nodo padre deja los hijos atras.
+  if (body.containerViewId) {
+    options.containerView = resolve(body.containerViewId)
   }
 
   if (body.tailId && body.headId) {
