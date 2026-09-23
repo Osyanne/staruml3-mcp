@@ -92,4 +92,59 @@ describe('planPackageDiagram', () => {
     expect(ops.dependencies[2].modelInit?.stereotype).toBe('use')
     expect(ops.dependencies[3].modelInit?.stereotype).toBe('<<merge>>')
   })
+
+  it('emite al padre antes que a sus hijos aunque se declaren al revés', () => {
+    const ops = planPackageDiagram({
+      name: 'X',
+      packages: [{ name: 'Hijo', parent: 'Padre' }, { name: 'Padre' }],
+      dependencies: []
+    })
+
+    expect(ops.packages.map(p => p.name)).toEqual(['Padre', 'Hijo'])
+  })
+
+  it('un paquete anidado queda dibujado adentro de su padre', () => {
+    const ops = planPackageDiagram({
+      name: 'X',
+      packages: [
+        { name: 'Sistema' },
+        { name: 'Dominio', parent: 'Sistema' },
+        { name: 'Persistencia', parent: 'Sistema' },
+        { name: 'Entidades', parent: 'Dominio' }
+      ],
+      dependencies: []
+    })
+    const caja = (n: string) => ops.packages.find(p => p.name === n)!
+    const adentro = (hijo: string, padre: string) => {
+      const h = caja(hijo)
+      const p = caja(padre)
+      return h.x1 > p.x1 && h.y1 > p.y1 && h.x2 < p.x2 && h.y2 < p.y2
+    }
+
+    expect(adentro('Dominio', 'Sistema')).toBe(true)
+    expect(adentro('Persistencia', 'Sistema')).toBe(true)
+    expect(adentro('Entidades', 'Dominio')).toBe(true)
+    // hermanos sin superponerse
+    const d = caja('Dominio')
+    const pe = caja('Persistencia')
+    expect(d.x2 <= pe.x1 || pe.x2 <= d.x1 || d.y2 <= pe.y1 || pe.y2 <= d.y1).toBe(true)
+  })
+
+  it('con anidamiento no pide layout automático, que sacaría a los hijos de su padre', () => {
+    const plano = planPackageDiagram({ name: 'X', packages: [{ name: 'A' }, { name: 'B' }], dependencies: [] })
+    const anidado = planPackageDiagram({
+      name: 'X', packages: [{ name: 'A' }, { name: 'B', parent: 'A' }], dependencies: []
+    })
+
+    expect(plano.layout).toBe(true)
+    expect(anidado.layout).toBe(false)
+  })
+
+  it('rechaza un ciclo de anidamiento', () => {
+    expect(() => planPackageDiagram({
+      name: 'X',
+      packages: [{ name: 'A', parent: 'B' }, { name: 'B', parent: 'A' }],
+      dependencies: []
+    })).toThrow(/circular/)
+  })
 })

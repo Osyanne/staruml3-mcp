@@ -29,14 +29,99 @@ export interface PackageDependencyOp {
 }
 
 export interface PackageDiagramOps {
+  /** En preorden: cada padre antes que sus hijos, para que su id exista al crearlos. */
   packages: PackageOp[]
   dependencies: PackageDependencyOp[]
+  /**
+   * Si conviene correr el layout automático después. Con anidamiento no: dagre
+   * no entiende de contención y saca a los hijos de su paquete.
+   */
+  layout: boolean
 }
 
 const BOX_W = 120
 const BOX_H = 80
 const GAP = 80
-const COLS = 4
+
+const CHAR_W = 9            // misma calibración empírica que usecase.ts
+const TEXT_PAD = 30
+const PAD = 25              // margen lateral adentro de un paquete
+const TAB = 45              // la pestaña con el nombre, más aire debajo
+const GAP_IN = 25           // entre hermanos adentro de un paquete
+const HIJOS_POR_FILA = 3
+const RAIZ_X = 50
+const RAIZ_Y = 50
+const RAIZ_MAX_W = 900
+
+interface Nodo {
+  name: string
+  hijos: Nodo[]
+  w: number
+  h: number
+  x1: number
+  y1: number
+  filas: Nodo[][]
+}
+
+function medir (n: Nodo): void {
+  const minW = Math.max(BOX_W, n.name.length * CHAR_W + TEXT_PAD)
+  if (n.hijos.length === 0) {
+    n.w = minW
+    n.h = BOX_H
+    return
+  }
+  n.hijos.forEach(medir)
+  for (let i = 0; i < n.hijos.length; i += HIJOS_POR_FILA) {
+    n.filas.push(n.hijos.slice(i, i + HIJOS_POR_FILA))
+  }
+  const anchoFila = (f: Nodo[]) => f.reduce((a, h) => a + h.w, 0) + GAP_IN * (f.length - 1)
+  const altoFila = (f: Nodo[]) => Math.max(...f.map(h => h.h))
+  const contenidoW = Math.max(...n.filas.map(anchoFila))
+  const contenidoH = n.filas.reduce((a, f) => a + altoFila(f), 0) + GAP_IN * (n.filas.length - 1)
+  n.w = Math.max(minW, contenidoW + 2 * PAD)
+  n.h = TAB + contenidoH + PAD
+}
+
+function colocar (n: Nodo, x: number, y: number): void {
+  n.x1 = x
+  n.y1 = y
+  let cy = y + TAB
+  for (const fila of n.filas) {
+    let cx = x + PAD
+    for (const h of fila) {
+      colocar(h, cx, cy)
+      cx += h.w + GAP_IN
+    }
+    cy += Math.max(...fila.map(h => h.h)) + GAP_IN
+  }
+}
+
+/** Las raíces van en filas que se cortan al llegar a un ancho de página cómodo. */
+function colocarRaices (raices: Nodo[]): void {
+  let x = RAIZ_X
+  let y = RAIZ_Y
+  let altoFila = 0
+  for (const r of raices) {
+    if (x > RAIZ_X && x + r.w > RAIZ_X + RAIZ_MAX_W) {
+      x = RAIZ_X
+      y += altoFila + GAP
+      altoFila = 0
+    }
+    colocar(r, x, y)
+    x += r.w + GAP
+    altoFila = Math.max(altoFila, r.h)
+  }
+}
+
+function aplanar (raices: Nodo[]): Nodo[] {
+  const salida: Nodo[] = []
+  const visitar = (n: Nodo): void => {
+    salida.push(n)
+    n.hijos.forEach(visitar)
+  }
+  raices.forEach(visitar)
+  return salida
+}
 
 export function planPackageDiagram(spec: PackageDiagramSpec): PackageDiagramOps {
   const nombres = spec.packages.map(p => p.name)
@@ -73,12 +158,29 @@ export function planPackageDiagram(spec: PackageDiagramSpec): PackageDiagramOps 
     }
   }
 
-  const packages: PackageOp[] = spec.packages.map((pkg, i) => {
-    const col = i % COLS
-    const row = Math.floor(i / COLS)
-    const x1 = 50 + col * (BOX_W + GAP)
-    const y1 = 50 + row * (BOX_H + GAP)
+  const nodos = new Map<string, Nodo>(spec.packages.map(p => [
+    p.name, { name: p.name, hijos: [], w: 0, h: 0, x1: 0, y1: 0, filas: [] }
+  ]))
+  const raices: Nodo[] = []
+  for (const pkg of spec.packages) {
+    const nodo = nodos.get(pkg.name)!
+    if (pkg.parent) nodos.get(pkg.parent)!.hijos.push(nodo)
+    else raices.push(nodo)
+  }
+  // Un ciclo (A dentro de B, B dentro de A) deja a los dos fuera de `raices` y
+  // el diagrama saldría sin ellos, en silencio.
+  const ordenados = aplanar(raices)
+  if (ordenados.length !== spec.packages.length) {
+    const alcanzables = new Set(ordenados.map(n => n.name))
+    const huerfanos = spec.packages.filter(p => !alcanzables.has(p.name)).map(p => p.name)
+    throw new Error(`Hay una cadena de anidamiento circular entre: ${huerfanos.join(', ')}.`)
+  }
+  raices.forEach(medir)
+  colocarRaices(raices)
 
+  const porNombre = new Map(spec.packages.map(p => [p.name, p]))
+  const packages: PackageOp[] = ordenados.map(n => {
+    const pkg = porNombre.get(n.name)!
     let id: 'UMLPackage' | 'UMLSubsystem' = 'UMLPackage'
     let modelInit: Record<string, unknown> | undefined
 
@@ -91,7 +193,7 @@ export function planPackageDiagram(spec: PackageDiagramSpec): PackageDiagramOps 
     return {
       id,
       name: pkg.name,
-      x1, y1, x2: x1 + BOX_W, y2: y1 + BOX_H,
+      x1: n.x1, y1: n.y1, x2: n.x1 + n.w, y2: n.y1 + n.h,
       parentPackage: pkg.parent,
       ...(modelInit ? { modelInit } : {})
     }
@@ -112,5 +214,5 @@ export function planPackageDiagram(spec: PackageDiagramSpec): PackageDiagramOps 
     return op
   })
 
-  return { packages, dependencies }
+  return { packages, dependencies, layout: spec.packages.every(p => !p.parent) }
 }

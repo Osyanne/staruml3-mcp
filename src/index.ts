@@ -1,8 +1,18 @@
 #!/usr/bin/env node
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { call, BridgeError } from './bridge.js'
+import { runBatch, type BatchBuilder, type BatchOutcome } from './batch.js'
+import {
+  materializeActivityDiagram, materializeClassDiagram, materializeComponentDiagram,
+  materializeDeploymentDiagram, materializePackageDiagram, materializeSequenceDiagram,
+  materializeUseCaseDiagram
+} from './materialize.js'
+import { ELEMENT_ALIASES, planAdditions, type DiagramContents } from './additions.js'
+import { exportPath, projectPath } from './export.js'
 import { planClassDiagram } from './diagrams/class.js'
 import { planUseCaseDiagram } from './diagrams/usecase.js'
 import { generateUseCaseSpecification } from './diagrams/usecase-spec.js'
@@ -14,165 +24,243 @@ import { planComponentDiagram } from './diagrams/component.js'
 
 interface Ref { _id: string; _type: string; name: string | null }
 
-const server = new McpServer({ name: 'staruml3-mcp', version: '0.2.0' })
+const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
+const server = new McpServer({ name: 'staruml3-mcp', version: pkg.version })
 
-/**
- * Envuelve el handler de un tool: si el bridge no responde, devolvemos un
- * content block de error legible en vez de dejar que la excepcion tumbe el
- * proceso o llegue como stack trace crudo al cliente MCP.
- */
-function safe<T> (fn: () => Promise<T>) {
-  return fn().then(
-    (data) => ({ content: [{ type: 'text' as const, text: typeof data === 'string' ? data : JSON.stringify(data, null, 2) }] }),
-    (err: unknown) => {
-      const message = err instanceof BridgeError ? err.message : String((err as Error)?.message ?? err)
-      return { content: [{ type: 'text' as const, text: message }], isError: true }
-    }
-  )
+type Content = { type: 'text'; text: string }
+interface ToolResult {
+  [key: string]: unknown
+  content: Content[]
+  structuredContent?: Record<string, unknown>
+  isError?: boolean
 }
 
-// ──────────────────────────────── Introspection ────────────────────────────────
+/**
+ * Si el bridge no responde o el plan es inválido, devolvemos un content block
+ * de error legible en vez de dejar que la excepción tumbe el proceso o llegue
+ * como stack trace crudo al cliente MCP.
+ */
+function fallo (err: unknown): ToolResult {
+  const message = err instanceof BridgeError ? err.message : String((err as Error)?.message ?? err)
+  return { content: [{ type: 'text', text: message }], isError: true }
+}
 
-server.registerTool(
-  'describe_types',
-  {
-    description: 'Lista los tipos de diagrama y elemento que esta instalación de StarUML puede crear.',
-    inputSchema: {}
-  },
-  async () => safe(async () => {
-    const data = await call<{ diagrams: string[]; modelAndView: string[] }>('/introspect')
-    return data
-  })
+async function texto (fn: () => Promise<string>): Promise<ToolResult> {
+  try {
+    return { content: [{ type: 'text', text: await fn() }] }
+  } catch (err) {
+    return fallo(err)
+  }
+}
+
+/**
+ * Resultado estructurado. El JSON va también en el texto porque hay clientes
+ * que solo le muestran el texto al modelo (lo recomienda la spec de MCP).
+ */
+async function estructurado (fn: () => Promise<{ resumen: string; datos: object }>): Promise<ToolResult> {
+  try {
+    const { resumen, datos } = await fn()
+    return {
+      content: [{ type: 'text', text: `${resumen}\n\n${JSON.stringify(datos, null, 2)}` }],
+      structuredContent: datos as Record<string, unknown>
+    }
+  } catch (err) {
+    return fallo(err)
+  }
+}
+
+function contar (n: number, singular: string, plural: string): string {
+  return `${n} ${n === 1 ? singular : plural}`
+}
+
+async function ejecutar (builder: BatchBuilder, que: string): Promise<{ resumen: string; datos: BatchOutcome }> {
+  const out = await runBatch(builder)
+  const partes = [contar(out.elements.length, 'elemento', 'elementos'), contar(out.relationships.length, 'relación', 'relaciones')]
+  if (out.addedMembers.length > 0) partes.push(contar(out.addedMembers.length, 'miembro agregado', 'miembros agregados'))
+  return {
+    resumen: `${que} "${out.diagramName ?? out.diagramId}": ${partes.join(', ')}. ` +
+      'Los ids sirven para edit_element, delete_elements y add_to_diagram.',
+    datos: out
+  }
+}
+
+// ────────────────────────────── Esquemas comunes ──────────────────────────────
+
+const memberOut = z.object({ name: z.string().nullable(), type: z.string(), modelId: z.string() })
+const outcomeShape = {
+  diagramId: z.string().nullable(),
+  diagramName: z.string().nullable(),
+  elements: z.array(z.object({
+    name: z.string().nullable(),
+    type: z.string(),
+    modelId: z.string(),
+    viewId: z.string().nullable(),
+    members: z.array(memberOut).optional()
+  })),
+  relationships: z.array(z.object({
+    type: z.string(),
+    from: z.string().nullable(),
+    to: z.string().nullable(),
+    modelId: z.string(),
+    viewId: z.string().nullable()
+  })),
+  addedMembers: z.array(memberOut.extend({ ownerId: z.string(), ownerName: z.string().nullable() }))
+}
+const refShape = z.object({ _id: z.string(), _type: z.string(), name: z.string().nullable() })
+
+const attributesField = z.array(z.string()).optional().describe(
+  'Ej: ["-nombre: string", "+static contador: int = 0"]. Visibilidad opcional al principio: + - # ~'
 )
+const operationsField = z.array(z.string()).optional().describe(
+  'Ej: ["+inscribir(materia: Materia, anio: int): boolean", "-validar()"]. ' +
+  'Se descompone en nombre, parámetros y tipo de retorno; no repitas los paréntesis en el nombre.'
+)
+const literalsField = z.array(z.string()).optional().describe('Solo enumeraciones. Ej: ["ACTIVO", "INACTIVO"]')
+
+const CREA = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
+const LEE = { readOnlyHint: true, openWorldHint: false }
+
+const NOTA_GENERA =
+  ' Crea un diagrama NUEVO; para cambiar uno existente usá add_to_diagram, edit_element o delete_elements. ' +
+  'Todo se crea en un solo paso: si algo falla no queda nada a medias, y Ctrl+Z en StarUML deshace el diagrama entero. ' +
+  'Devuelve el id de cada elemento y relación.'
+
+// ──────────────────────────────── Introspección ────────────────────────────────
 
 server.registerTool(
   'health',
   {
+    title: 'Estado de StarUML',
     description: 'Verifica que StarUML esté abierto y el bridge responda. Devuelve versión y proyecto actual.',
-    inputSchema: {}
+    inputSchema: {},
+    annotations: LEE
   },
-  async () => safe(async () => {
-    const data = await call<{ staruml: string; node: string; project: string | null }>('/health')
-    return data
+  async () => estructurado(async () => {
+    const datos = await call<{ staruml: string; node: string; project: string | null }>('/health')
+    return { resumen: `StarUML ${datos.staruml} responde. Proyecto: ${datos.project ?? '(ninguno)'}.`, datos }
+  })
+)
+
+server.registerTool(
+  'describe_types',
+  {
+    title: 'Tipos creables',
+    description:
+      'Lista los ids de fábrica que esta instalación de StarUML puede crear (diagramas, elementos con vista, ' +
+      'modelos sueltos). Sirven como `type` en add_to_diagram cuando no alcanza con los alias.',
+    inputSchema: {},
+    annotations: LEE
+  },
+  async () => estructurado(async () => {
+    const datos = await call<{ diagrams: string[]; modelAndView: string[]; model: string[] }>('/introspect')
+    return { resumen: `${datos.diagrams.length} tipos de diagrama, ${datos.modelAndView.length} de elemento.`, datos }
   })
 )
 
 server.registerTool(
   'list_diagrams',
   {
-    description: 'Lista los diagramas del proyecto abierto en StarUML. Sin filtro devuelve todos.',
+    title: 'Listar diagramas',
+    description: 'Lista los diagramas del proyecto abierto en StarUML (UML y de las demás notaciones).',
     inputSchema: {
       type: z.string().optional().describe(
-        'Tipo de diagrama a listar. Ej: "UMLClassDiagram", "UMLUseCaseDiagram", ' +
-        '"UMLActivityDiagram", "UMLSequenceDiagram", "UMLPackageDiagram", ' +
-        '"UMLDeploymentDiagram", "UMLComponentDiagram". Si se omite, lista todos.'
+        'Filtra por tipo, ej: "UMLClassDiagram", "UMLUseCaseDiagram", "UMLSequenceDiagram". Si se omite, lista todos.'
       )
-    }
+    },
+    outputSchema: { diagrams: z.array(refShape) },
+    annotations: LEE
   },
-  async ({ type }) => safe(async () => {
-    if (type) {
-      return await call<Ref[]>('/query', { type })
-    }
-    // Sin filtro: consultar todos los tipos de diagrama conocidos
-    const types = [
-      'UMLClassDiagram', 'UMLUseCaseDiagram', 'UMLActivityDiagram',
-      'UMLSequenceDiagram', 'UMLPackageDiagram', 'UMLDeploymentDiagram',
-      'UMLComponentDiagram', 'UMLObjectDiagram', 'UMLStatechartDiagram',
-      'UMLCommunicationDiagram', 'UMLCompositeStructureDiagram', 'UMLProfileDiagram'
-    ]
-    const results: Ref[] = []
-    for (const t of types) {
-      const found = await call<Ref[]>('/query', { type: t })
-      results.push(...found)
-    }
-    return results
+  async ({ type }) => estructurado(async () => {
+    // getInstancesOf usa instanceof (repository.js:2083): 'Diagram' trae todos los subtipos.
+    const diagrams = await call<Ref[]>('/query', { type: type ?? 'Diagram' })
+    return { resumen: contar(diagrams.length, 'diagrama', 'diagramas') + '.', datos: { diagrams } }
   })
 )
 
-// ───────────────────────────── Class Diagram ─────────────────────────────
+server.registerTool(
+  'get_diagram',
+  {
+    title: 'Ver un diagrama',
+    description:
+      'Devuelve lo que hay dibujado en un diagrama: cada vista con su modelo (id, tipo, nombre), posición y ' +
+      'contenedor de los nodos, extremos de las relaciones y miembros de las clases. Usalo antes de editar.',
+    inputSchema: { diagramId: z.string().describe('id del diagrama (de list_diagrams o de un generate_*)') },
+    annotations: LEE
+  },
+  async ({ diagramId }) => estructurado(async () => {
+    const datos = await call<DiagramContents>('/diagram', { diagramId })
+    const aristas = datos.views.filter(v => v.tail !== undefined).length
+    return {
+      resumen: `"${datos.diagram.name}" (${datos.diagram._type}): ` +
+        `${contar(datos.views.length - aristas, 'nodo', 'nodos')}, ${contar(aristas, 'relación', 'relaciones')}.`,
+      datos
+    }
+  })
+)
 
 server.registerTool(
-  'generate_diagram',
+  'get_element',
   {
-    description: 'Crea un diagrama de clases completo en StarUML a partir de una descripción estructurada.',
+    title: 'Ver un elemento',
+    description:
+      'Devuelve los campos reales de un elemento (modelo o vista) según el metamodelo de StarUML, con sus ' +
+      'valores. Sirve para saber qué `field` acepta edit_element.',
+    inputSchema: { id: z.string().describe('modelId o viewId') },
+    annotations: LEE
+  },
+  async ({ id }) => estructurado(async () => {
+    const datos = await call<Ref & { fields: Record<string, unknown> }>('/element', { id })
+    return { resumen: `${datos._type} "${datos.name ?? datos._id}".`, datos }
+  })
+)
+
+// ─────────────────────────────── Diagrama de clases ───────────────────────────────
+
+server.registerTool(
+  'generate_class_diagram',
+  {
+    title: 'Generar diagrama de clases',
+    description: 'Crea un diagrama de clases: clases, interfaces, enumeraciones, sus miembros y relaciones.' + NOTA_GENERA,
     inputSchema: {
       name: z.string().describe('Nombre del diagrama'),
       classes: z.array(z.object({
         name: z.string(),
-        attributes: z.array(z.string()).optional().describe('Ej: ["nombre: string"]'),
-        operations: z.array(z.string()).optional().describe('Ej: ["inscribir(): void"]')
+        kind: z.enum(['class', 'interface', 'enumeration']).optional()
+          .describe('Por defecto class. Una interface se dibuja como caja con «interface».'),
+        isAbstract: z.boolean().optional(),
+        stereotype: z.string().optional().describe('Ej: "entity", "control", "boundary"'),
+        attributes: attributesField,
+        operations: operationsField,
+        literals: literalsField
       })),
       relationships: z.array(z.object({
-        type: z.enum(['association', 'generalization', 'dependency', 'realization', 'composition', 'aggregation']),
+        type: z.enum(['association', 'generalization', 'dependency', 'realization', 'composition', 'aggregation'])
+          .describe(
+            'generalization: del hijo al padre. realization: de la clase a la interfaz que implementa. ' +
+            'composition/aggregation: el rombo va del lado de `to` (el todo).'
+          ),
         from: z.string(),
         to: z.string(),
         fromMultiplicity: z.string().optional().describe('Ej: "1", "0..*"'),
         toMultiplicity: z.string().optional().describe('Ej: "1", "0..*"'),
         name: z.string().optional().describe('Nombre de la relación')
       })).default([])
-    }
+    },
+    outputSchema: outcomeShape,
+    annotations: CREA
   },
-  async (spec) => safe(async () => {
-    const ops = planClassDiagram(spec)
-
-    const diagram = await call<Ref>('/create-diagram', {
-      id: 'UMLClassDiagram',
-      name: spec.name
-    })
-
-    const vistas = new Map<string, string>()
-    for (const c of ops.classes) {
-      const creado = await call<{ view: Ref; model: Ref }>('/create', {
-        id: c.id, diagramId: diagram._id, name: c.name,
-        x1: c.x1, y1: c.y1, x2: c.x2, y2: c.y2
-      })
-      vistas.set(c.name, creado.view._id)
-
-      for (const attribute of c.attributes) {
-        await call('/create', {
-          id: 'UMLAttribute',
-          parentId: creado.model._id,
-          field: 'attributes',
-          name: attribute.name,
-          modelInit: { type: attribute.type }
-        })
-      }
-
-      for (const operation of c.operations) {
-        await call('/create', {
-          id: 'UMLOperation',
-          parentId: creado.model._id,
-          field: 'operations',
-          name: operation
-        })
-      }
-    }
-
-    for (const r of ops.relationships) {
-      await call('/create', {
-        id: r.id,
-        diagramId: diagram._id,
-        tailId: vistas.get(r.from),
-        headId: vistas.get(r.to),
-        ...(r.modelInit ? { modelInit: r.modelInit } : {})
-      })
-    }
-
-    await call('/layout', { diagramId: diagram._id })
-
-    return `Diagrama "${spec.name}" creado (${ops.classes.length} clases, ` +
-           `${ops.relationships.length} relaciones). id=${diagram._id}`
-  })
+  async (spec) => estructurado(async () =>
+    ejecutar(materializeClassDiagram(spec.name, planClassDiagram(spec)), 'Diagrama de clases creado')
+  )
 )
 
-// ─────────────────────────── Use Case Diagram ───────────────────────────
+// ─────────────────────────── Diagrama de casos de uso ───────────────────────────
 
 server.registerTool(
   'generate_use_case_diagram',
   {
-    description:
-      'Crea un diagrama de casos de uso completo en StarUML: actores, casos de uso, ' +
-      'recuadro del sistema y relaciones.',
+    title: 'Generar diagrama de casos de uso',
+    description: 'Crea un diagrama de casos de uso: actores, casos de uso, recuadro del sistema y relaciones.' + NOTA_GENERA,
     inputSchema: {
       name: z.string().describe('Nombre del diagrama'),
       actors: z.array(z.string()).describe('Ej: ["Cliente", "Administrador"]'),
@@ -196,59 +284,24 @@ server.registerTool(
         from: z.string(),
         to: z.string()
       })).default([])
-    }
+    },
+    outputSchema: outcomeShape,
+    annotations: CREA
   },
-  async (spec) => safe(async () => {
-    const ops = planUseCaseDiagram(spec)
-
-    const diagram = await call<Ref>('/create-diagram', {
-      id: 'UMLUseCaseDiagram',
-      name: spec.name
-    })
-
-    if (ops.boundary) {
-      await call('/create', {
-        id: ops.boundary.id,
-        diagramId: diagram._id,
-        name: ops.boundary.name,
-        x1: ops.boundary.x1, y1: ops.boundary.y1,
-        x2: ops.boundary.x2, y2: ops.boundary.y2
-      })
-    }
-
-    const vistas = new Map<string, string>()
-    for (const nodo of [...ops.actors, ...ops.useCases]) {
-      const creado = await call<{ view: Ref; model: Ref }>('/create', {
-        id: nodo.id, diagramId: diagram._id, name: nodo.name,
-        x1: nodo.x1, y1: nodo.y1, x2: nodo.x2, y2: nodo.y2
-      })
-      vistas.set(nodo.name, creado.view._id)
-    }
-
-    for (const r of ops.relationships) {
-      await call('/create', {
-        id: r.id,
-        diagramId: diagram._id,
-        tailId: vistas.get(r.from),
-        headId: vistas.get(r.to),
-        ...(r.modelInit ? { modelInit: r.modelInit } : {})
-      })
-    }
-
-    return `Diagrama de casos de uso "${spec.name}" creado ` +
-           `(${ops.actors.length} actores, ${ops.useCases.length} casos de uso, ` +
-           `${ops.relationships.length} relaciones). id=${diagram._id}`
-  })
+  async (spec) => estructurado(async () =>
+    ejecutar(materializeUseCaseDiagram(spec.name, planUseCaseDiagram(spec)), 'Diagrama de casos de uso creado')
+  )
 )
 
-// ────────────────────── Use Case Specification ──────────────────────
+// ────────────────────── Especificación de casos de uso ──────────────────────
 
 server.registerTool(
   'generate_use_case_specification',
   {
+    title: 'Especificación de casos de uso',
     description:
       'Genera un documento Markdown con las especificaciones detalladas de casos de uso: ' +
-      'actores, flujo normal, flujos alternativos, excepciones, pre/postcondiciones.',
+      'actores, flujo normal, flujos alternativos, excepciones, pre/postcondiciones. No toca StarUML.',
     inputSchema: {
       systemName: z.string().describe('Nombre del sistema'),
       useCases: z.array(z.object({
@@ -282,20 +335,19 @@ server.registerTool(
         frequency: z.string().optional(),
         priority: z.enum(['alta', 'media', 'baja']).optional()
       }))
-    }
+    },
+    annotations: { ...LEE, idempotentHint: true }
   },
-  async (spec) => safe(async () => {
-    const markdown = generateUseCaseSpecification(spec)
-    return markdown
-  })
+  async (spec) => texto(async () => generateUseCaseSpecification(spec))
 )
 
-// ────────────────────────── Activity Diagram ──────────────────────────
+// ────────────────────────── Diagrama de actividades ──────────────────────────
 
 server.registerTool(
   'generate_activity_diagram',
   {
-    description: 'Crea un diagrama de actividades completo en StarUML: acciones, nodos de control, flujos y swimlanes.',
+    title: 'Generar diagrama de actividades',
+    description: 'Crea un diagrama de actividades: acciones, nodos de control, flujos y swimlanes.' + NOTA_GENERA,
     inputSchema: {
       name: z.string().describe('Nombre del diagrama'),
       nodes: z.array(z.object({
@@ -316,68 +368,27 @@ server.registerTool(
         name: z.string().describe('Nombre del swimlane'),
         nodes: z.array(z.string()).describe('Nombres de nodos en este swimlane')
       })).optional()
-    }
+    },
+    outputSchema: outcomeShape,
+    annotations: CREA
   },
-  async (spec) => safe(async () => {
-    const ops = planActivityDiagram(spec)
-
-    const diagram = await call<Ref>('/create-diagram', {
-      id: 'UMLActivityDiagram',
-      name: spec.name
-    })
-
-    // Crear particiones primero (quedan detrás)
-    for (const p of ops.partitions) {
-      await call('/create', {
-        id: p.id, diagramId: diagram._id, name: p.name,
-        x1: p.x1, y1: p.y1, x2: p.x2, y2: p.y2
-      })
-    }
-
-    // Crear nodos
-    const vistas = new Map<string, string>()
-    for (const n of ops.nodes) {
-      const creado = await call<{ view: Ref; model: Ref }>('/create', {
-        id: n.id, diagramId: diagram._id, name: n.name,
-        x1: n.x1, y1: n.y1, x2: n.x2, y2: n.y2,
-        ...(n.modelInit ? { modelInit: n.modelInit } : {})
-      })
-      vistas.set(n.name, creado.view._id)
-    }
-
-    // Crear flujos
-    for (const f of ops.flows) {
-      await call('/create', {
-        id: f.id,
-        diagramId: diagram._id,
-        tailId: vistas.get(f.from),
-        headId: vistas.get(f.to),
-        ...(f.modelInit ? { modelInit: f.modelInit } : {})
-      })
-    }
-
-    // Solo aplicar layout automático si no hay particiones
-    if (ops.partitions.length === 0) {
-      await call('/layout', { diagramId: diagram._id })
-    }
-
-    return `Diagrama de actividades "${spec.name}" creado ` +
-           `(${ops.nodes.length} nodos, ${ops.flows.length} flujos, ` +
-           `${ops.partitions.length} particiones). id=${diagram._id}`
-  })
+  async (spec) => estructurado(async () =>
+    ejecutar(materializeActivityDiagram(spec.name, planActivityDiagram(spec)), 'Diagrama de actividades creado')
+  )
 )
 
-// ────────────────────────── Sequence Diagram ──────────────────────────
+// ────────────────────────── Diagrama de secuencia ──────────────────────────
 
 server.registerTool(
   'generate_sequence_diagram',
   {
-    description: 'Crea un diagrama de secuencia completo en StarUML: líneas de vida, mensajes y fragmentos combinados.',
+    title: 'Generar diagrama de secuencia',
+    description: 'Crea un diagrama de secuencia: líneas de vida, mensajes y fragmentos combinados con sus guardas.' + NOTA_GENERA,
     inputSchema: {
       name: z.string().describe('Nombre del diagrama'),
       lifelines: z.array(z.object({
         name: z.string(),
-        type: z.string().optional().describe('Tipo/clase del objeto, ej: "Sistema"')
+        type: z.string().optional().describe('Tipo/clase del objeto; se muestra "nombre: Tipo". Ej: "Sistema"')
       })),
       messages: z.array(z.object({
         from: z.string().describe('Nombre del lifeline origen'),
@@ -391,70 +402,31 @@ server.registerTool(
       fragments: z.array(z.object({
         type: z.enum(['alt', 'opt', 'loop', 'par', 'break', 'critical']),
         operands: z.array(z.object({
-          guard: z.string().optional(),
-          messageIndices: z.array(z.number()).describe('Índices de mensajes cubiertos por este operando')
-        }))
+          guard: z.string().optional().describe('Condición del operando, ej: "saldo >= monto" o "else"'),
+          messageIndices: z.array(z.number()).describe('Índices (desde 0) de los mensajes cubiertos por este operando')
+        })).describe('Un operando por rama: un alt con if/else lleva dos.')
       })).optional()
-    }
+    },
+    outputSchema: outcomeShape,
+    annotations: CREA
   },
-  async (spec) => safe(async () => {
-    const ops = planSequenceDiagram(spec)
-
-    const diagram = await call<Ref>('/create-diagram', {
-      id: 'UMLSequenceDiagram',
-      name: spec.name
-    })
-
-    // Crear lifelines
-    const lifelineViews = new Map<string, string>()
-    for (const ll of ops.lifelines) {
-      const creado = await call<{ view: Ref; model: Ref }>('/create', {
-        id: ll.id, diagramId: diagram._id, name: ll.name,
-        x1: ll.x1, y1: ll.y1, x2: ll.x2, y2: ll.y2
-      })
-      lifelineViews.set(ll.name, creado.view._id)
-    }
-
-    // Crear mensajes — conectan entre vistas de lifelines
-    for (const m of ops.messages) {
-      await call('/create', {
-        id: m.id,
-        diagramId: diagram._id,
-        name: m.name,
-        tailId: lifelineViews.get(m.fromLifeline),
-        headId: lifelineViews.get(m.toLifeline),
-        x1: 0, y1: m.y, x2: 0, y2: m.y,
-        ...(m.modelInit ? { modelInit: m.modelInit } : {})
-      })
-    }
-
-    // Crear fragmentos combinados
-    for (const f of ops.fragments) {
-      await call('/create', {
-        id: f.id,
-        diagramId: diagram._id,
-        x1: f.x1, y1: f.y1, x2: f.x2, y2: f.y2,
-        modelInit: { interactionOperator: f.interactionOperator }
-      })
-    }
-
-    return `Diagrama de secuencia "${spec.name}" creado ` +
-           `(${ops.lifelines.length} líneas de vida, ${ops.messages.length} mensajes, ` +
-           `${ops.fragments.length} fragmentos). id=${diagram._id}`
-  })
+  async (spec) => estructurado(async () =>
+    ejecutar(materializeSequenceDiagram(spec.name, planSequenceDiagram(spec)), 'Diagrama de secuencia creado')
+  )
 )
 
-// ────────────────────────── Package Diagram ──────────────────────────
+// ────────────────────────── Diagrama de paquetes ──────────────────────────
 
 server.registerTool(
   'generate_package_diagram',
   {
-    description: 'Crea un diagrama de paquetes completo en StarUML: paquetes, subsistemas y dependencias.',
+    title: 'Generar diagrama de paquetes',
+    description: 'Crea un diagrama de paquetes: paquetes (anidables), subsistemas y dependencias.' + NOTA_GENERA,
     inputSchema: {
       name: z.string().describe('Nombre del diagrama'),
       packages: z.array(z.object({
         name: z.string(),
-        parent: z.string().optional().describe('Nombre del paquete padre para anidamiento'),
+        parent: z.string().optional().describe('Nombre del paquete que lo contiene. Se dibuja adentro.'),
         stereotype: z.string().optional().describe('Ej: "subsystem"')
       })),
       dependencies: z.array(z.object({
@@ -464,52 +436,24 @@ server.registerTool(
           .describe('Tipo de dependencia. Por defecto: dependency'),
         stereotype: z.string().optional()
       })).default([])
-    }
+    },
+    outputSchema: outcomeShape,
+    annotations: CREA
   },
-  async (spec) => safe(async () => {
-    const ops = planPackageDiagram(spec)
-
-    const diagram = await call<Ref>('/create-diagram', {
-      id: 'UMLPackageDiagram',
-      name: spec.name
-    })
-
-    const vistas = new Map<string, string>()
-    for (const p of ops.packages) {
-      const creado = await call<{ view: Ref; model: Ref }>('/create', {
-        id: p.id, diagramId: diagram._id, name: p.name,
-        x1: p.x1, y1: p.y1, x2: p.x2, y2: p.y2,
-        ...(p.parentPackage ? { parentId: vistas.get(p.parentPackage) } : {}),
-        ...(p.modelInit ? { modelInit: p.modelInit } : {})
-      })
-      vistas.set(p.name, creado.view._id)
-    }
-
-    for (const d of ops.dependencies) {
-      await call('/create', {
-        id: d.id,
-        diagramId: diagram._id,
-        tailId: vistas.get(d.from),
-        headId: vistas.get(d.to),
-        ...(d.modelInit ? { modelInit: d.modelInit } : {})
-      })
-    }
-
-    await call('/layout', { diagramId: diagram._id })
-
-    return `Diagrama de paquetes "${spec.name}" creado ` +
-           `(${ops.packages.length} paquetes, ${ops.dependencies.length} dependencias). id=${diagram._id}`
-  })
+  async (spec) => estructurado(async () =>
+    ejecutar(materializePackageDiagram(spec.name, planPackageDiagram(spec)), 'Diagrama de paquetes creado')
+  )
 )
 
-// ────────────────────────── Deployment Diagram ──────────────────────────
+// ────────────────────────── Diagrama de despliegue ──────────────────────────
 
 server.registerTool(
   'generate_deployment_diagram',
   {
+    title: 'Generar diagrama de despliegue',
     description:
-      'Crea un diagrama de despliegue completo en StarUML: nodos, componentes y artefactos ' +
-      '(anidables unos dentro de otros), deployments, rutas de comunicación y dependencias.',
+      'Crea un diagrama de despliegue: nodos, componentes y artefactos (anidables unos dentro de otros), ' +
+      'deployments, rutas de comunicación y dependencias.' + NOTA_GENERA,
     inputSchema: {
       name: z.string().describe('Nombre del diagrama'),
       nodes: z.array(z.object({
@@ -540,73 +484,22 @@ server.registerTool(
         lineStyle: z.enum(['rectilinear', 'oblique', 'roundrect', 'curve']).optional()
           .describe('Forma de la línea. El default de StarUML es oblique.')
       })).default([])
-    }
+    },
+    outputSchema: outcomeShape,
+    annotations: CREA
   },
-  async (spec) => safe(async () => {
-    const ops = planDeploymentDiagram(spec)
-
-    const diagram = await call<Ref>('/create-diagram', {
-      id: 'UMLDeploymentDiagram',
-      name: spec.name
-    })
-
-    // El planificador emite los elementos en preorden, asi que cuando toca un
-    // hijo su contenedor ya paso por aca y esta en los dos mapas.
-    const vistas = new Map<string, string>()
-    const modelos = new Map<string, string>()
-
-    for (const el of ops.elements) {
-      const creado = await call<{ view: Ref; model: Ref }>('/create', {
-        id: el.id, diagramId: diagram._id, name: el.name,
-        x1: el.x1, y1: el.y1, x2: el.x2, y2: el.y2,
-        // parentId dice quien es el DUENO en el arbol de modelo; containerViewId,
-        // quien es el contenedor en el DIBUJO. Hacen falta los dos: con solo el
-        // primero el hijo se ve adentro pero no esta contenido, y arrastrar el
-        // padre lo deja atras.
-        ...(el.parent
-          ? { parentId: modelos.get(el.parent), containerViewId: vistas.get(el.parent) }
-          : {}),
-        ...(el.modelInit ? { modelInit: el.modelInit } : {})
-      })
-      vistas.set(el.name, creado.view._id)
-      modelos.set(el.name, creado.model._id)
-
-      // stereotypeDisplay y compania son props de la VISTA, no del modelo:
-      // /create solo sabe inicializar el modelo, asi que van por /update.
-      for (const [field, value] of Object.entries(el.viewInit ?? {})) {
-        await call('/update', { id: creado.view._id, field, value })
-      }
-    }
-
-    for (const r of ops.relationships) {
-      const creada = await call<{ view: Ref; model: Ref }>('/create', {
-        id: r.id,
-        diagramId: diagram._id,
-        tailId: vistas.get(r.from),
-        headId: vistas.get(r.to),
-        ...(r.modelInit ? { modelInit: r.modelInit } : {})
-      })
-
-      for (const [field, value] of Object.entries(r.viewInit ?? {})) {
-        await call('/update', { id: creada.view._id, field, value })
-      }
-    }
-
-    // Sin /layout a proposito, al reves que los demas generadores: el layout
-    // automatico no entiende de contencion y sacaria a los hijos de su
-    // contenedor. La geometria ya la calculo el planificador.
-
-    return `Diagrama de despliegue "${spec.name}" creado ` +
-           `(${ops.elements.length} elementos, ${ops.relationships.length} relaciones). id=${diagram._id}`
-  })
+  async (spec) => estructurado(async () =>
+    ejecutar(materializeDeploymentDiagram(spec.name, planDeploymentDiagram(spec)), 'Diagrama de despliegue creado')
+  )
 )
 
-// ────────────────────────── Component Diagram ──────────────────────────
+// ────────────────────────── Diagrama de componentes ──────────────────────────
 
 server.registerTool(
   'generate_component_diagram',
   {
-    description: 'Crea un diagrama de componentes completo en StarUML: componentes, interfaces, realizaciones y dependencias.',
+    title: 'Generar diagrama de componentes',
+    description: 'Crea un diagrama de componentes: componentes, interfaces, realizaciones y dependencias.' + NOTA_GENERA,
     inputSchema: {
       name: z.string().describe('Nombre del diagrama'),
       components: z.array(z.object({
@@ -622,74 +515,172 @@ server.registerTool(
         type: z.enum(['dependency', 'interfaceRealization', 'componentRealization']),
         stereotype: z.string().optional()
       })).default([])
-    }
+    },
+    outputSchema: outcomeShape,
+    annotations: CREA
   },
-  async (spec) => safe(async () => {
-    const ops = planComponentDiagram(spec)
-
-    const diagram = await call<Ref>('/create-diagram', {
-      id: 'UMLComponentDiagram',
-      name: spec.name
-    })
-
-    const vistas = new Map<string, string>()
-    for (const el of ops.elements) {
-      const creado = await call<{ view: Ref; model: Ref }>('/create', {
-        id: el.id, diagramId: diagram._id, name: el.name,
-        x1: el.x1, y1: el.y1, x2: el.x2, y2: el.y2,
-        ...(el.modelInit ? { modelInit: el.modelInit } : {})
-      })
-      vistas.set(el.name, creado.view._id)
-    }
-
-    for (const r of ops.relationships) {
-      await call('/create', {
-        id: r.id,
-        diagramId: diagram._id,
-        tailId: vistas.get(r.from),
-        headId: vistas.get(r.to),
-        ...(r.modelInit ? { modelInit: r.modelInit } : {})
-      })
-    }
-
-    await call('/layout', { diagramId: diagram._id, direction: 'LR' })
-
-    return `Diagrama de componentes "${spec.name}" creado ` +
-           `(${ops.elements.length} elementos, ${ops.relationships.length} relaciones). id=${diagram._id}`
-  })
+  async (spec) => estructurado(async () =>
+    ejecutar(materializeComponentDiagram(spec.name, planComponentDiagram(spec)), 'Diagrama de componentes creado')
+  )
 )
 
-// ─────────────────────────── Editing & Export ───────────────────────────
+// ─────────────────────────────── Edición ───────────────────────────────
+
+server.registerTool(
+  'add_to_diagram',
+  {
+    title: 'Agregar a un diagrama',
+    description:
+      'Agrega elementos, miembros (atributos, operaciones, literales) y relaciones a un diagrama EXISTENTE. ' +
+      'Los extremos, contenedores y dueños se nombran por nombre (lo nuevo y lo ya dibujado) o por id. ' +
+      'Lo nuevo sin x/y se ubica debajo de lo que ya hay, o adentro de su contenedor. ' +
+      'Todo en un solo paso deshacible; si algo falla no queda nada a medias.',
+    inputSchema: {
+      diagramId: z.string().describe('id del diagrama (de list_diagrams o de un generate_*)'),
+      elements: z.array(z.object({
+        type: z.string().describe(
+          `Alias: ${Object.keys(ELEMENT_ALIASES).join(', ')}. O un id de fábrica que empiece con UML (ver describe_types).`
+        ),
+        name: z.string(),
+        x: z.number().optional(),
+        y: z.number().optional(),
+        width: z.number().optional(),
+        height: z.number().optional(),
+        container: z.string().optional().describe(
+          'Nombre o id del elemento dentro del cual va: nodo, componente o paquete (cambia de dueño y se mueve con él), ' +
+          'o recuadro de sistema / partición (solo se ubica adentro).'
+        ),
+        stereotype: z.string().optional(),
+        isAbstract: z.boolean().optional(),
+        attributes: attributesField,
+        operations: operationsField,
+        literals: literalsField
+      })).optional(),
+      members: z.array(z.object({
+        owner: z.string().describe('Nombre o id de la clase, interfaz o enumeración'),
+        attributes: attributesField,
+        operations: operationsField,
+        literals: literalsField
+      })).optional().describe('Miembros para clasificadores que ya existen (o que se crean en este mismo pedido).'),
+      relationships: z.array(z.object({
+        type: z.string().describe(
+          'association, directedAssociation, composition, aggregation, generalization, dependency, realization, ' +
+          'interfaceRealization, componentRealization, include, extend, controlFlow, objectFlow, deployment, ' +
+          'communicationPath; o un id de fábrica UML...'
+        ),
+        from: z.string().describe('Nombre o id'),
+        to: z.string().describe('Nombre o id'),
+        name: z.string().optional(),
+        fromMultiplicity: z.string().optional(),
+        toMultiplicity: z.string().optional(),
+        guard: z.string().optional().describe('Para controlFlow/objectFlow')
+      })).optional(),
+      layout: z.boolean().optional().describe(
+        'Reacomoda TODO el diagrama con layout automático. Por defecto false: respeta lo que ya está ubicado.'
+      )
+    },
+    outputSchema: outcomeShape,
+    annotations: CREA
+  },
+  async ({ diagramId, ...spec }) => estructurado(async () => {
+    const contents = await call<DiagramContents>('/diagram', { diagramId })
+    return ejecutar(planAdditions(spec, contents), 'Agregado a')
+  })
+)
 
 server.registerTool(
   'edit_element',
   {
-    description: 'Cambia una propiedad de un elemento existente (por ejemplo su nombre).',
+    title: 'Editar un elemento',
+    description:
+      'Cambia una propiedad de un elemento existente (modelo o vista). Acepta rutas con punto. ' +
+      'Usá get_element para ver los campos disponibles.',
     inputSchema: {
-      id: z.string().describe('_id del elemento'),
-      field: z.string().describe('Campo a modificar, ej "name"'),
-      value: z.string()
-    }
+      id: z.string().describe('modelId o viewId (de get_diagram o de un generate_*)'),
+      field: z.string().describe(
+        'Campo o ruta. Ej: "name", "isAbstract", "visibility", "stereotype", "end2.multiplicity", ' +
+        '"end2.aggregation" (none/shared/composite), "operands.1.guard", "fillColor" (en una vista).'
+      ),
+      value: z.union([z.string(), z.number(), z.boolean(), z.null()]).optional()
+        .describe('Nuevo valor: texto, número, booleano o null'),
+      refId: z.string().optional().describe(
+        'En lugar de value: id de otro elemento, para campos que apuntan a uno (p. ej. el type de un atributo = una clase)'
+      )
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
   },
-  async ({ id, field, value }) => safe(async () => {
-    const data = await call<Ref>('/update', { id, field, value })
-    return data
+  async ({ id, field, value, refId }) => estructurado(async () => {
+    if (value === undefined && refId === undefined) throw new Error('Pasá value o refId.')
+    if (value !== undefined && refId !== undefined) throw new Error('Pasá value o refId, no los dos.')
+    const datos = await call<Ref>('/update', { id, field, ...(refId !== undefined ? { refId } : { value }) })
+    return { resumen: `${datos._type} "${datos.name ?? datos._id}": ${field} actualizado.`, datos }
+  })
+)
+
+server.registerTool(
+  'delete_elements',
+  {
+    title: 'Borrar elementos',
+    description:
+      'Borra elementos. Con un viewId lo saca solo de ese diagrama (queda en el modelo). Con un modelId lo borra ' +
+      'del proyecto junto con todas sus vistas y relaciones. Con el id de un diagrama borra el diagrama ' +
+      '(sus elementos siguen en el modelo). Un solo paso deshacible.',
+    inputSchema: {
+      ids: z.array(z.string()).min(1).describe('viewIds, modelIds o ids de diagrama')
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
+  },
+  async ({ ids }) => estructurado(async () => {
+    const datos = await call<{ models: Ref[]; views: Ref[] }>('/delete', { ids })
+    return {
+      resumen: `Borrado: ${contar(datos.models.length, 'modelo', 'modelos')} y ${contar(datos.views.length, 'vista', 'vistas')}.`,
+      datos
+    }
+  })
+)
+
+// ─────────────────────────── Guardar y exportar ───────────────────────────
+
+server.registerTool(
+  'save_project',
+  {
+    title: 'Guardar proyecto',
+    description:
+      'Guarda el proyecto de StarUML como .mdj, sin abrir diálogos. Sin path guarda sobre el archivo actual ' +
+      '(falla si el proyecto nunca se guardó).',
+    inputSchema: {
+      path: z.string().optional().describe('Ruta absoluta del .mdj. Sobrescribe si existe.')
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
+  },
+  async ({ path }) => texto(async () => {
+    const destino = path === undefined ? undefined : projectPath(path)
+    if (destino) mkdirSync(dirname(destino), { recursive: true })
+    const data = await call<{ path: string }>('/save', destino ? { path: destino } : {})
+    return `Proyecto guardado en ${data.path}`
   })
 )
 
 server.registerTool(
   'export_diagram',
   {
-    description: 'Exporta un diagrama a PNG, JPEG o SVG en una ruta absoluta.',
+    title: 'Exportar diagrama',
+    description: 'Exporta un diagrama a PNG, JPEG o SVG. Crea la carpeta si no existe y sobrescribe el archivo.',
     inputSchema: {
       diagramId: z.string(),
       format: z.enum(['png', 'jpeg', 'svg']),
-      path: z.string().describe('Ruta absoluta del archivo de salida')
-    }
+      path: z.string().describe('Ruta absoluta del archivo de salida. Si no tiene extensión se agrega la del formato.')
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
   },
-  async (args) => safe(async () => {
-    const data = await call<{ path: string }>('/export', args)
-    return `Exportado a ${data.path}`
+  async ({ diagramId, format, path }) => texto(async () => {
+    const destino = exportPath(format, path)
+    mkdirSync(dirname(destino), { recursive: true })
+    await call<{ path: string }>('/export', { diagramId, format, path: destino })
+    if (!existsSync(destino)) {
+      throw new Error(`StarUML no escribió ${destino}. ¿El diagrama está vacío o la carpeta es de solo lectura?`)
+    }
+    return `Exportado a ${destino}`
   })
 )
 

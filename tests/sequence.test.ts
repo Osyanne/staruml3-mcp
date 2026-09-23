@@ -144,4 +144,15 @@ describe('planSequenceDiagram', () => {
       ]
     })).toThrowError(/fuera de rango/)
   })
+
+  it('el tipo de una línea de vida se escribe en represent.type, así StarUML la muestra "nombre: Tipo"', () => {
+    const ops = planSequenceDiagram({
+      name: 'X',
+      lifelines: [{ name: 'sis', type: 'Sistema' }, { name: 'Usuario' }],
+      messages: []
+    })
+
+    expect(ops.lifelines[0].modelInit).toEqual({ 'represent.type': 'Sistema' })
+    expect(ops.lifelines[1].modelInit).toBeUndefined()
+  })
 })

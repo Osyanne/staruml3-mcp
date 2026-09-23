@@ -28,6 +28,11 @@ export interface LifelineOp {
   y1: number
   x2: number
   y2: number
+  /**
+   * La factory de StarUML le cuelga a cada lifeline un UMLAttribute (el rol)
+   * en `represent`; la etiqueta "nombre: Tipo" sale del `type` de ese rol.
+   */
+  modelInit?: Record<string, unknown>
 }
 
 export interface MessageOp {
@@ -116,7 +121,8 @@ export function planSequenceDiagram(spec: SequenceDiagramSpec): SequenceDiagramO
       x1,
       y1: LIFELINE_TOP,
       x2: x1 + LIFELINE_WIDTH,
-      y2: LIFELINE_TOP + LIFELINE_HEIGHT
+      y2: LIFELINE_TOP + LIFELINE_HEIGHT,
+      ...(ll.type ? { modelInit: { 'represent.type': ll.type } } : {})
     }
   })
 
