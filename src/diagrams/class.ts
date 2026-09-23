@@ -4,12 +4,15 @@ export interface ClassSpec {
   operations?: string[]
 }
 
-export type RelationKind = 'association' | 'generalization' | 'dependency' | 'realization'
+export type RelationKind = 'association' | 'generalization' | 'dependency' | 'realization' | 'composition' | 'aggregation'
 
 export interface RelationSpec {
   type: RelationKind
   from: string
   to: string
+  fromMultiplicity?: string
+  toMultiplicity?: string
+  name?: string
 }
 
 export interface ClassDiagramSpec {
@@ -22,7 +25,7 @@ export interface ClassOp {
   id: 'UMLClass'
   name: string
   x1: number; y1: number; x2: number; y2: number
-  attributes: string[]
+  attributes: Array<{ name: string; type: string }>
   operations: string[]
 }
 
@@ -30,6 +33,7 @@ export interface RelationOp {
   id: string
   from: string
   to: string
+  modelInit?: Record<string, unknown>
 }
 
 export interface ClassDiagramOps {
@@ -37,8 +41,10 @@ export interface ClassDiagramOps {
   relationships: RelationOp[]
 }
 
-const FACTORY_ID: Record<RelationKind, string> = {
+const RELATION_FACTORY_ID: Record<RelationKind, string> = {
   association: 'UMLAssociation',
+  composition: 'UMLAssociation',
+  aggregation: 'UMLAssociation',
   generalization: 'UMLGeneralization',
   dependency: 'UMLDependency',
   realization: 'UMLInterfaceRealization'
@@ -48,6 +54,17 @@ const BOX_W = 140
 const BOX_H = 90
 const GAP = 80
 const COLS = 4
+
+function parseAttribute (source: string): { name: string; type: string } {
+  const separator = source.indexOf(':')
+  if (separator === -1) {
+    return { name: source.trim(), type: '' }
+  }
+  return {
+    name: source.slice(0, separator).trim(),
+    type: source.slice(separator + 1).trim()
+  }
+}
 
 /**
  * Traduce intención a primitivas del bridge. No toca la red: por eso se testea
@@ -90,19 +107,44 @@ export function planClassDiagram (spec: ClassDiagramSpec): ClassDiagramOps {
     const x1 = 50 + col * (BOX_W + GAP)
     const y1 = 50 + row * (BOX_H + GAP)
     return {
-      id: 'UMLClass',
+      id: 'UMLClass' as const,
       name: c.name,
       x1, y1, x2: x1 + BOX_W, y2: y1 + BOX_H,
-      attributes: c.attributes ?? [],
+      attributes: (c.attributes ?? []).map(parseAttribute),
       operations: c.operations ?? []
     }
   })
 
-  const relationships: RelationOp[] = spec.relationships.map(r => ({
-    id: FACTORY_ID[r.type],
-    from: r.from,
-    to: r.to
-  }))
+  const relationships: RelationOp[] = spec.relationships.map(r => {
+    const op: RelationOp = {
+      id: RELATION_FACTORY_ID[r.type],
+      from: r.from,
+      to: r.to
+    }
+
+    // Composición y agregación son UMLAssociation con aggregation en end2
+    if (r.type === 'composition') {
+      op.modelInit = { 'end2.aggregation': 'composite' }
+    } else if (r.type === 'aggregation') {
+      op.modelInit = { 'end2.aggregation': 'shared' }
+    }
+
+    // Multiplicidad: se aplica sobre los ends de la asociación
+    if (r.fromMultiplicity || r.toMultiplicity) {
+      op.modelInit = {
+        ...(op.modelInit ?? {}),
+        ...(r.fromMultiplicity ? { 'end1.multiplicity': r.fromMultiplicity } : {}),
+        ...(r.toMultiplicity ? { 'end2.multiplicity': r.toMultiplicity } : {})
+      }
+    }
+
+    // Nombre de la relación
+    if (r.name) {
+      op.modelInit = { ...(op.modelInit ?? {}), name: r.name }
+    }
+
+    return op
+  })
 
   return { classes, relationships }
 }

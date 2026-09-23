@@ -10,15 +10,21 @@ versión que pide una universidad o un cliente.
 
 ## Qué hace hoy
 
-- **Diagramas de clases** — clases, y las relaciones asociación, generalización,
-  dependencia y realización. Posicionamiento con autolayout (dagre).
-- **Diagramas de casos de uso** — actores, casos de uso, recuadro del sistema
-  (`UMLUseCaseSubject`), y las relaciones asociación, `include`, `extend` y generalización.
-  Posicionamiento determinista.
+Soporta los **6 tipos de diagramas** más utilizados:
+
+- **Diagramas de clases** — composición, agregación, asociación, generalización, dependencia y realización. Con atributos, operaciones y multiplicidad.
+- **Diagramas de casos de uso** — actores, casos de uso, boundary, include, extend y generalización.
+- **Diagramas de actividades** — acciones, control nodes (initial, final, decision, merge, fork, join), object nodes, swimlanes/partitions.
+- **Diagramas de secuencia** — lifelines, mensajes síncronos/asíncronos/create/delete, y fragmentos combinados (alt, opt, loop, etc).
+- **Diagramas de paquetes** — paquetes, subsistemas y dependencias.
+- **Diagramas de despliegue y componentes** — nodos, artefactos, componentes, interfaces, y sus realizaciones.
+  El de despliegue anida: componentes dentro de nodos y dentro de otros componentes, artefactos en forma icónica,
+  y rótulos y estilo de línea en las relaciones.
+
+Además incluye:
+- **Especificaciones de casos de uso** — generación de documentos Markdown con flujos normales, alternativos y excepciones.
 - **Exportación** a PNG, JPEG o SVG.
 - **Lectura y edición** de elementos existentes.
-
-No implementa diagramas de entidad-relación ni de secuencia.
 
 ## Requisitos
 
@@ -70,10 +76,17 @@ Con StarUML abierto, se le pide al agente en lenguaje natural. Por ejemplo:
 |---|---|
 | `generate_diagram` | Crea un diagrama de clases completo |
 | `generate_use_case_diagram` | Crea un diagrama de casos de uso completo |
-| `list_diagrams` | Lista los diagramas de clases del proyecto |
+| `generate_activity_diagram` | Crea un diagrama de actividades (con o sin particiones) |
+| `generate_sequence_diagram` | Crea un diagrama de secuencia (lifelines y mensajes) |
+| `generate_package_diagram` | Crea un diagrama de paquetes y dependencias |
+| `generate_deployment_diagram` | Crea un diagrama de despliegue (nodos, componentes y artefactos anidados) |
+| `generate_component_diagram` | Crea un diagrama de componentes e interfaces |
+| `generate_use_case_specification`| Genera documento Markdown de un CU estructurado |
+| `list_diagrams` | Lista todos los diagramas del proyecto |
 | `edit_element` | Cambia una propiedad de un elemento existente |
 | `export_diagram` | Exporta un diagrama a PNG, JPEG o SVG |
 | `describe_types` | Lista los tipos que esta instalación puede crear |
+| `health` | Verifica estado de conexión con StarUML |
 
 ## Cómo funciona
 
@@ -106,11 +119,9 @@ Conocidas y declaradas, no sorpresas:
 
 - **Sólo Windows.** El lado Node resuelve las rutas vía `%APPDATA%`. StarUML 3 corre también
   en macOS y Linux, pero acá haría falta resolver `userData` por plataforma. No está hecho.
-- **Los atributos y operaciones de las clases no se dibujan.** El endpoint `/create` del
-  puente todavía no los soporta; las cajas salen con los compartimentos vacíos.
+- **Los atributos y operaciones de las clases a veces requieren acomodarse manualmente.**
 - **Deshacer es por elemento.** Cada elemento se crea en su propia transacción, así que
   revertir un diagrama de N elementos son N veces `Ctrl+Z`.
-- **`list_diagrams` sólo ve diagramas de clases.** No enumera los de casos de uso.
 - **Si tu StarUML no tiene licencia**, todo lo que exportes sale con la marca de agua
   "UNREGISTERED" en diagonal. Es cosa de StarUML al renderizar, no de este proyecto.
 - El puerto `39876` está fijo.

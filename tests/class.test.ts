@@ -15,6 +15,9 @@ describe('planClassDiagram', () => {
     expect(ops.classes).toHaveLength(2)
     expect(ops.relationships).toHaveLength(1)
     expect(ops.relationships[0].id).toBe('UMLAssociation')
+    expect(ops.classes[0].attributes).toEqual([
+      { name: 'nombre', type: 'string' }
+    ])
   })
 
   it('coloca las clases en una grilla, sin superponer', () => {
